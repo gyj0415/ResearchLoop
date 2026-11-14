@@ -30,10 +30,10 @@ def _spec():
 
 
 class OperatorLogicTests(unittest.TestCase):
-    def test_retrieval_import_does_not_load_operator_runtime(self):
+    def test_research_engine_import_does_not_load_operator_runtime(self):
         code = (
             "import sys\n"
-            "import researchloop.runner\n"
+            "import researchloop.engine.core\n"
             "assert 'torch' not in sys.modules, 'torch'\n"
             "assert 'src.gates' not in sys.modules, 'gates'\n"
             "assert 'researchloop.scenarios.operator.pipeline' not in sys.modules, 'pipeline'\n"

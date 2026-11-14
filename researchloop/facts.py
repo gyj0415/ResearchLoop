@@ -5,6 +5,7 @@ predicate 3, tag 2, with a base of 1 so that an unscored fact is still usable
 when the query has no extractable keyword.
 """
 import json
+import re
 
 from . import db
 
@@ -30,6 +31,12 @@ def keywords(query):
     for part in normalized.split():
         if len(part) >= 2:
             add(part)
+    ignored = {"研究", "分析", "实验", "数据", "是否", "如何", "什么", "这个", "以及", "进行", "当前", "我们"}
+    for phrase in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        for index in range(min(len(phrase) - 1, 48)):
+            word = phrase[index:index + 2]
+            if word not in ignored:
+                add(word)
     return result
 
 

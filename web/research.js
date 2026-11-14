@@ -1,23 +1,10 @@
-/* Question-driven workspace. Legacy domain runs remain readable in the archive. */
+/* Open research questions, evidence and invocation history. */
 statuses.incomplete='证据不足 / 未完成';
-const previousTop=renderTop, previousMetrics=renderMetrics, previousRun=renderRun, previousMemory=renderMemory, previousData=renderData;
-const memoryArchive=document.createElement('details');memoryArchive.className='legacy-archive';memoryArchive.innerHTML='<summary>旧版检索经验档案</summary>';
-$('#memory-list').before(memoryArchive);memoryArchive.append($('#memory-list'));
-memoryArchive.insertAdjacentHTML('beforebegin','<div id="research-memory-list"></div>');
-const toolPage=$('#page-data'), toolArchive=document.createElement('details');toolArchive.className='legacy-archive';toolArchive.innerHTML='<summary>旧版SciFact数据与封存评估</summary>';
-for(const child of [...toolPage.children])if(!child.classList.contains('page-heading'))toolArchive.append(child);
-toolArchive.append($('#prepare-button'));toolPage.append(toolArchive);
-toolArchive.insertAdjacentHTML('beforebegin','<div id="research-tool-list" class="research-tools"></div>');
-$('#page-data h1').textContent='材料与工具';
-$('#page-data .subtitle').textContent='查看工具的输入要求和使用范围。';
-$('.protocol-callout strong').textContent='评价研究过程，而不只看报告是否写完';
-$('.protocol-callout p').textContent='记录证据、可证伪假设、真实实验与独立复核。比较历史经验时保持同问题、材料、模型和预算；复核完成也可能得到否定结论。';
-$('#log-source').insertAdjacentHTML('afterbegin','<option value="research">科研 Agent</option>');
+const previousTop=renderTop, previousMetrics=renderMetrics, previousRun=renderRun;
 
 renderTop=function(){
   previousTop();
   $('#dataset-summary').textContent=`${state.research_tools?.length||0} 项工具可用 · 当前会话 ${run?.assets?.length||0} 份材料`;
-  $('#test-seal').classList.add('hidden');
   if(page==='data')$('#page-label').textContent='材料与工具';
   $('#draft-brief').disabled=!!state.active_run;
   const modelSelect=$('#research-model');
@@ -34,7 +21,7 @@ renderMetrics=function(){
   $('#metrics').innerHTML=metric('已复核实验',String(verified.length),'',`${verified.filter(e=>e.verification.check.passed).length} 项满足判据，否定结果同样保留`,'target')+
     metric('本轮模型 token',run?.budget?number(run.budget.total_tokens):'0','','规划、修正与报告决策均计入','coin')+
     metric('真实实验',String(experiments.length),'',`${run?.steps?.length||0} 步工具行动 · 不预设实验顺序`,'flask')+
-    metric('研究经验',`v${run?.memory_version||0}`,'','仅作待验证先验，不继承历史成绩','spark');
+    metric('记忆',`${(run?.memory_context?.facts?.length||0)+(run?.experience?1:0)} 条`,'',run?.memory_saved_version?`已保存方法 v${run.memory_saved_version}`:run?.memory_version?`参考方法 v${run.memory_version}`:'按当前研究问题自动召回','spark');
 };
 renderRun=function(){
   if(run&&run.domain!=='research'){previousRun();return;}
@@ -81,19 +68,7 @@ function renderResearchEvidence(value){
   const assets=(value.assets||[]).map(a=>`<article class="evidence-card"><div class="evidence-card-heading"><span class="source-id">${esc(a.id)}</span><span class="evidence-kind">上传材料</span></div><h3>${esc(a.name)}</h3><p>${number(a.bytes)} 字节</p><details><summary>文件校验值</summary><pre>${esc(a.sha256||'未记录')}</pre></details></article>`);
   const cards=[...experiments,...sources,...assets];box.innerHTML=cards.length?`<div class="research-evidence">${cards.join('')}</div>`:empty('尚无可展示的证据','可在执行记录中查看取证过程与失败原因。');
 }
-renderRecords=function(){
-  if(!state.runs.length){$('#records').innerHTML=empty('没有研究记录','提交研究问题后，真实决策、实验和报告会自动保存。');return;}
-  $('#records').innerHTML=`<div class="table-wrap"><table><thead><tr><th>研究问题 / 任务</th><th>方式</th><th>状态</th><th>验证</th><th>模型token</th><th>耗时 / 实验</th><th></th></tr></thead><tbody>${state.runs.map(r=>`<tr><td>${esc(r.question||r.task)}<small>${esc(r.id)}</small></td><td>${esc(modeLabel(r))}</td><td>${esc(statuses[r.status]||r.status)}</td><td>${r.domain==='research'?`${r.verified_count} 项复核`:r.domain==='operator'?'旧版算子门控':r.guard?percent(r.guard.metrics.complete_at_5):'未验收'}</td><td>${number(r.budget?.total_tokens||0)}</td><td>${time(r.budget?.elapsed_seconds??r.budget?.elapsed)} / ${r.experiment_count} 项</td><td><button class="small-link" data-research-open="${esc(r.id)}">打开 ↗</button></td></tr>`).join('')}</tbody></table></div>`;
-  $$('[data-research-open]').forEach(el=>el.onclick=()=>selectRun(el.dataset.researchOpen));
-};
-renderMemory=function(){
-  previousMemory();
-  const memory=state.research_memory||{active:0,versions:[]};
-  $('#active-memory').textContent=`科研经验 v${memory.active}`;$('#memory-count').textContent=memory.versions.length;
-  $('#research-memory-list').innerHTML=[...memory.versions].reverse().map(v=>`<article class="panel memory-card"><h2>v${v.version} · ${v.version===memory.active?'当前启用':'历史版本'}</h2><p>${esc(v.lesson)}</p><p class="body-muted">来源问题：${esc(v.question)}<br>${esc(v.limitations)}</p><button class="secondary-button" data-research-memory="${v.version}">切换到此版本</button></article>`).join('')+`<article class="panel memory-card"><h2>v0 · 无历史经验</h2><p>每次研究均依据当前问题与真实反馈。经验是方法先验，不能替代本轮实验。</p><button class="secondary-button" data-research-memory="0">回退到 v0</button></article>`;
-  $$('[data-research-memory]').forEach(el=>el.onclick=async()=>{try{await api('/api/research/memory/activate',{version:Number(el.dataset.researchMemory)});await refresh(true);}catch(e){toast(e.message);}});
-};
-renderData=function(){previousData();$('#research-tool-list').innerHTML=(state.research_tools||[]).map(t=>`<article class="panel memory-card"><h3>${esc(t.name)}</h3><p>${esc(t.description)}</p></article>`).join('');};
+renderData=function(){$('#research-tool-list').innerHTML=(state.research_tools||[]).map(t=>`<article class="panel memory-card"><h3>${esc(t.name)}</h3><p>${esc(t.description)}</p></article>`).join('');};
 let pendingFiles=[];
 const TEXT_SUFFIX=/\.(csv|txt|md|json)$/i, DOC_SUFFIX=/\.(pdf|docx|pptx)$/i;
 const MAX_TEXT_BYTES=500000, MAX_DOC_BYTES=20*1024*1024;
@@ -115,7 +90,7 @@ async function startGeneralResearch(){
     const assets=[];for(const file of pendingFiles)assets.push(await assetPayload(file));
     const pick=$('#research-model').value;
     const isCloud=pick.startsWith('cloud:');
-    const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,roles:state.settings?.roles||{},token_limit:Number($('#research-tokens').value),seconds_limit:Number($('#research-seconds').value),max_steps:Number($('#research-steps').value),use_memory:$('#research-use-memory').checked});
+    const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,roles:state.settings?.roles||{},token_limit:Number($('#research-tokens').value),seconds_limit:Number($('#research-seconds').value),max_steps:Number($('#research-steps').value)});
     pendingFiles=[];renderAssetChips();
     await selectRun(created.id);toast('研究已启动；材料已随本次运行保存。');
   }catch(error){toast(error.message);}finally{button.disabled=!!state?.active_run;}
@@ -171,8 +146,15 @@ function renderSessionLayout(value){
   $('#session-step-count').textContent=value.steps?.length||0;
   $('#session-evidence-count').textContent=(value.sources?.length||0)+(value.assets?.length||0)+(value.experiments?.length||0);
   $('#session-report').href=`/api/runs/${value.id}/report`;$('#session-export').href=`/api/runs/${value.id}/export`;
-  const pending=['running','queued'].includes(value.status);$('#session-report').classList.toggle('hidden',pending||value.domain!=='research');$('#session-archive').disabled=pending;
-  if(value.domain==='research')$('#experiments').innerHTML='';
+  const pending=['running','queued','pausing'].includes(value.status);$('#session-report').classList.toggle('hidden',pending||value.domain!=='research');$('#session-archive').disabled=pending;
+  const isResearch=value.domain==='research',paused=value.status==='paused';
+  $('#session-pause').classList.toggle('hidden',!isResearch||!pending);$('#session-pause').disabled=value.status==='pausing';$('#session-pause').textContent=value.status==='pausing'?'正在暂停…':'暂停研究';
+  $('#session-resume').classList.toggle('hidden',!isResearch||!paused);$('#session-resume').disabled=!!state?.active_run;
+  $('#followup-send').disabled=pending||paused||!!state?.active_run;
+  const note=$('#session-control-note');note.classList.toggle('hidden',!paused&&value.status!=='pausing'&&!value.lineage);
+  note.textContent=value.status==='pausing'?'正在等待当前调用结束。完成后保存结果与实际用量，再暂停。':paused?'研究已暂停。继续时沿用当前轮次和剩余预算，暂停期间不计研究用时。':value.lineage?`从 ${value.lineage.run_id} 的 ${value.lineage.node_id} 创建的分支${value.lineage.precision==='legacy_context'?' · 历史记录上下文，重新规划':' · 已恢复该调用结束时的状态'}`:'';
+  $('#session-step-count').textContent=value.trace?.length||(value.steps?.length||0)+(value.calls?.length||0);
+  if(isResearch)$('#experiments').innerHTML='';
 }
 function renderWorkflow(run){
   const panel=$('#workflow-panel');
@@ -182,33 +164,39 @@ function renderWorkflow(run){
   const byAgent={};calls.forEach(c=>{if(c.agent)byAgent[c.agent]=(byAgent[c.agent]||0)+1;});
   panel.innerHTML=`<div class="panel-header"><h2>本轮研究流程</h2><span class="workflow-source">${esc(run.workflow?.source==='agent_tool'?'Agent 设计':run.workflow?.source==='model'?'模型规划':run.workflow?.source==='model_retry'?'模型重试':'默认规划')} · ${stages.length} 阶段</span></div>${run.workflow?.reason?`<p class="workflow-reason">${esc(run.workflow.reason)}</p>`:''}<div class="workflow-stages">${stages.map((s,i)=>{const a=agents.filter(x=>x.id==='g'+(i+1)).at(-1)||{};return `<article class="workflow-stage${a.status==='running'?' active':''}"><div class="workflow-stage-heading"><span class="workflow-index">${String(i+1).padStart(2,'0')}</span><h3>${esc(roleLabel(s.role))}</h3><span class="workflow-stage-status">${esc(statuses[a.status]||'未开始')}</span></div><p>${esc(s.goal)}</p>${s.why?`<details class="stage-why"><summary>设计依据</summary><p>${esc(s.why)}</p></details>`:''}<small>${esc(a.model||'尚未调用模型')} · ${byAgent[a.id]||0} 次调用</small></article>`;}).join('')}</div>`;
 }
+function invocationRecords(value){
+  if(value.trace?.length)return value.trace;
+  // Legacy model requests cannot be placed between tool calls reliably.
+  return [...(value.steps||[]).map(s=>({...s,kind:s.tool==='invalid'?'decision_error':'tool_call',input:s.args,output:s.observation,legacy:true})),
+    ...(value.calls||[]).map((c,i)=>({...c,id:`call:${i}`,kind:'model_call',status:c.status==='error'?'failed':'completed',input:c.request,output:c.response,usage:c,elapsed_seconds:c.wall_seconds,legacy:true}))];
+}
 function renderChain(run){
   const panel=$('#chain-panel');
   if(!run||run.domain!=='research'){panel.classList.add('hidden');return;}
   panel.classList.remove('hidden');
-  const calls=run.calls||[],steps=run.steps||[],box=$('#chain');
-  if(chainView.runId!==run.id){chainView={runId:run.id,turn:'all',status:'all',query:''};$('#chain-status').value='all';$('#chain-search').value='';box._chainStamp='';}
-  const turnNames=[...new Set([...(run.turns||[]).map(t=>t.id),...steps.map(s=>s.turn).filter(Boolean)])];
+  const records=invocationRecords(run),box=$('#chain');
+  if(chainView.runId!==run.id){chainView={runId:run.id,turn:'all',status:'all',kind:'all',query:''};$('#chain-status').value='all';$('#chain-kind').value='all';$('#chain-search').value='';box._chainStamp='';}
+  const turnNames=[...new Set([...(run.turns||[]).map(t=>t.id),...records.map(s=>s.turn).filter(Boolean)])];
   const options='<option value="all">全部轮次</option>'+turnNames.map(t=>`<option value="${esc(t)}">第 ${esc(t.replace(/^t/,''))} 轮</option>`).join('');
   if($('#chain-turn').innerHTML!==options){$('#chain-turn').innerHTML=options;$('#chain-turn').value=chainView.turn;}
-  const scopedSteps=steps.filter(s=>chainView.turn==='all'||s.turn===chainView.turn);
-  const scopedCalls=calls.filter(c=>chainView.turn==='all'||c.turn===chainView.turn);
-  const filtered=scopedSteps.filter(s=>(chainView.status==='all'||s.status===chainView.status)&&(!chainView.query||JSON.stringify(s).toLowerCase().includes(chainView.query.toLowerCase())));
-  const known=scopedCalls.reduce((total,c)=>total+(c.input_tokens||0)+(c.output_tokens||0),0),unknown=scopedCalls.reduce((total,c)=>total+(c.unknown_reserved||0),0);
-  const failures=scopedSteps.filter(s=>s.status==='failed').length;
-  $('#chain-meta').textContent=`${scopedSteps.length} 步 · ${failures} 项失败 · ${scopedCalls.length} 次模型调用`;
-  $('#chain-usage-note').textContent=`${chainView.turn==='all'?'会话累计':'本轮'}模型用量 ${number(known+unknown)} token${unknown?`（含 ${number(unknown)} 未知用量预留）`:''} · 每步耗时为工具执行时间`;
+  const scoped=records.filter(s=>chainView.turn==='all'||s.turn===chainView.turn);
+  const filtered=scoped.filter(s=>(chainView.status==='all'||s.status===chainView.status)&&(!chainView.kind||chainView.kind==='all'||s.kind===chainView.kind)&&(!chainView.query||JSON.stringify(s).toLowerCase().includes(chainView.query.toLowerCase())));
+  $('#chain-meta').textContent=`${scoped.length} 条调用 · ${scoped.filter(s=>s.kind==='model_call').length} 次模型请求 · ${scoped.filter(s=>s.kind==='tool_call').length} 次工具执行`;
+  $('#chain-usage-note').textContent=run.trace?.length?'每次请求独立计量；工具执行单独标记。展开记录可查看输入输出或从此处创建分支。':'历史记录未保存调用顺序与状态快照；模型请求单独列出，分支会基于所选记录重新规划。';
   const stamp=JSON.stringify([run.id,chainView,filtered]);if(box._chainStamp===stamp)return;
-  const open=new Set($$('details.chain-step[open]').map(el=>el.dataset.stepKey));
-  box._chainStamp=stamp;
+  const open=new Set($$('details.chain-step[open]').map(el=>el.dataset.stepKey));box._chainStamp=stamp;
   box.innerHTML=filtered.length?filtered.map((s,index)=>{
-    const key=`${s.turn||'legacy'}:${s.id}`,failed=s.status==='failed',seconds=typeof s.elapsed_seconds==='number'?s.elapsed_seconds:null;
-    const duration=s.tool==='invalid'?'未执行工具':seconds==null?'耗时未记录':`工具 ${seconds<1?seconds.toFixed(2):seconds.toFixed(1)}s`;
-    const status=failed?'失败':s.status==='completed'?'已执行':statuses[s.status]||s.status||'状态未记录';
-    const rawReason=s.reason||'',reason=/^(模型自主选择|控制器执行确定性检查|按通用研究协议进入)/.test(rawReason)?'':rawReason,error=typeof s.observation?.error==='string'?s.observation.error:'';
-    return `<details class="chain-step ${esc(s.status||'')}" data-step-key="${esc(key)}" ${open.has(key)?'open':''}><summary class="chain-summary"><span class="chain-index">${esc(s.id?.replace(/^s/,'')||String(index+1))}</span><span class="chain-content"><span class="chain-heading"><strong class="chain-tool" title="${esc(s.tool)}">${esc(TOOL_LABELS[s.tool]||s.tool)}</strong><span class="chain-status ${failed?'failed':''}">${esc(status)}</span><span class="chain-agent" title="${esc(s.agent||'')}">${esc(s.source==='controller'?'控制器':roleLabel(s.role))}</span></span><span class="chain-reason">${esc(reason)}</span>${error?`<span class="chain-error">${esc(error.slice(0,220))}</span>`:''}</span><span class="chain-duration">${esc(duration)}</span><span class="chain-chevron" aria-hidden="true">⌄</span></summary><div class="chain-body"><div class="chain-io"><section><h3>输入参数</h3><pre>${esc(JSON.stringify(s.args??{},null,2))}</pre></section><section><h3>执行结果</h3><pre>${esc(JSON.stringify(s.observation??{},null,2))}</pre></section></div><div class="chain-detail-meta"><span>${esc(s.id)}${s.turn?` · ${esc(s.turn)}`:''} · ${esc(s.tool)}</span><button type="button" class="small-link" data-chain-raw="${esc(key)}">完整步骤</button></div></div></details>`;
-  }).join(''):empty(scopedSteps.length?'没有匹配的步骤':'尚无执行记录',scopedSteps.length?'调整轮次、状态或关键词。':'开始研究后，实际工具调用会显示在这里。');
-  $$('[data-chain-raw]').forEach(button=>button.onclick=()=>showDetail('步骤记录',steps.find(s=>`${s.turn||'legacy'}:${s.id}`===button.dataset.chainRaw)));
+    const key=`${s.turn||'legacy'}:${s.id}`,failed=s.status==='failed',model=s.kind==='model_call',seconds=s.elapsed_seconds;
+    const title=model?(s.model||'模型请求'):(TOOL_LABELS[s.tool]||s.tool||'决策校验');
+    const source=s.source==='cloud'?'云端':s.source==='controller'?'控制器':'本地';
+    const usage=s.usage||{},tokens=(usage.input_tokens||0)+(usage.output_tokens||0)+(usage.unknown_reserved||0);
+    const duration=`${typeof seconds==='number'?seconds.toFixed(2)+'s':'等待结果'}${model?' · '+number(tokens)+' token':''}`;
+    const error=s.output?.error||'';
+    const forkable=s.status!=='running'&&(s.checkpoint||s.legacy);
+    return `<details class="chain-step ${esc(s.status||'')} ${model?'chain-model':'chain-tool-call'}" data-step-key="${esc(key)}" ${open.has(key)?'open':''}><summary class="chain-summary"><span class="chain-index">${index+1}</span><span class="chain-content"><span class="chain-heading"><strong class="chain-tool">${esc(title)}</strong><span class="invocation-kind ${model?'model':''}">${model?'模型请求':s.kind==='decision_error'?'决策错误':'工具'}</span><span class="chain-status ${failed?'failed':''}">${esc(statuses[s.status]||s.status)}</span><span class="chain-agent">${esc(source)}${s.role?' · '+esc(roleLabel(s.role)):''}</span></span><span class="chain-reason">${esc(s.route?.reason||s.reason||s.purpose||'')}</span>${error?`<span class="chain-error">${esc(String(error).slice(0,220))}</span>`:''}</span><span class="chain-duration">${esc(duration)}</span><span class="chain-chevron" aria-hidden="true">⌄</span></summary><div class="chain-body">${s.route?`<p class="call-routing">模型路由：${esc(s.route.tier==='strong'?'高能力档':s.route.tier==='light'?'轻量档':'默认模型')} · ${esc(s.route.reason)}</p>`:''}<div class="chain-io"><section><h3>输入</h3><pre>${esc(JSON.stringify(s.input??{},null,2))}</pre></section><section><h3>输出</h3><pre>${esc(JSON.stringify(s.output??{},null,2))}</pre></section></div><div class="chain-detail-meta"><span>${esc(s.id)}${s.turn?' · '+esc(s.turn):''}${s.parent_id?' · 由 '+esc(s.parent_id)+' 决策':''}${s.inherited_from?' · 继承自原会话':''}</span><div><button type="button" class="small-link" data-chain-raw="${esc(s.id)}">原始记录</button>${forkable?`<button type="button" class="secondary-button fork-record" data-fork-node="${esc(s.id)}">从此处分支</button>`:''}</div></div></div></details>`;
+  }).join(''):empty('暂无匹配的调用','开始研究或调整筛选条件。');
+  $$('[data-chain-raw]').forEach(button=>button.onclick=()=>showDetail('调用记录',records.find(s=>s.id===button.dataset.chainRaw)));
+  $$('[data-fork-node]').forEach(button=>button.onclick=()=>openFork(records.find(s=>s.id===button.dataset.forkNode)));
 }
 function renderBudgetResearch(){
   if(!run||run.domain!=='research')return;
@@ -218,7 +206,7 @@ function renderBudgetResearch(){
     box.innerHTML=`<div class="budget-item"><div class="budget-label">模型 token <strong id="budget-token-text">—</strong></div><div class="progress-track"><div class="progress-fill" id="budget-token-bar" style="width:0%"></div></div></div><div class="budget-item"><div class="budget-label">墙钟时间 <strong id="budget-time-text">—</strong></div><div class="progress-track"><div class="progress-fill purple" id="budget-time-bar" style="width:0%"></div></div></div><div class="budget-metrics"><div class="budget-row"><span>模型调用</span><strong id="budget-calls">—</strong></div><div class="budget-row"><span>生成速度</span><strong id="budget-speed">—</strong></div><div class="budget-row"><span>缓存命中</span><strong id="budget-cached">—</strong></div><div class="budget-row"><span>上下文用量</span><strong id="budget-context">—</strong></div><div class="budget-row"><span>云端调用</span><strong id="budget-cloud">—</strong></div><div class="budget-row"><span>工具耗时</span><strong id="budget-tools">—</strong></div></div>`;
   }
   const turn=run.turns?.at(-1)?.id;
-  const calls=(run.calls||[]).filter(call=>!turn||call.turn===turn);
+  const calls=(run.calls||[]).slice(run.budget_call_start||0).filter(call=>!turn||call.turn===turn);
   const out=calls.reduce((sum,call)=>sum+(call.output_tokens||0),0);
   const wall=calls.reduce((sum,call)=>sum+(call.wall_seconds||0),0);
   const cached=b.cached_tokens||0;
@@ -235,7 +223,7 @@ function renderBudgetResearch(){
   set('budget-cached',`${number(cached)} token`);
   set('budget-context',calls.at(-1)?.context_tokens==null?'未返回':`${number(context)} token`);
   set('budget-cloud',`${b.cloud_calls||0} 次`);
-  const toolSeconds=(run.steps||[]).filter(step=>!turn||step.turn===turn).reduce((sum,step)=>sum+(step.elapsed_seconds||0),0);
+  const toolSeconds=(run.steps||[]).slice(run.branch_step_start||0).filter(step=>!turn||step.turn===turn).reduce((sum,step)=>sum+(step.elapsed_seconds||0),0);
   set('budget-tools',`${toolSeconds.toFixed(2)} s`);
 }
 const baseResearchRun=renderRun;
@@ -279,3 +267,14 @@ $('#followup-send')?.addEventListener('click',async()=>{
     await refresh(true);
   }catch(error){toast(error.message);}finally{button.disabled=false;}
 });
+
+Object.assign(statuses,{pausing:'正在暂停',paused:'已暂停',incomplete:'未完成',inconclusive:'证据不足'});
+$('#chain-kind').addEventListener('change',event=>{chainView.kind=event.target.value;renderChain(run);});
+$('#session-pause').addEventListener('click',async()=>{try{await api(`/api/runs/${run.id}/pause`,{});toast('已请求暂停，等待当前调用结束。');await refresh(true);}catch(error){toast(error.message);}});
+$('#session-resume').addEventListener('click',async()=>{const button=$('#session-resume');button.disabled=true;try{await api(`/api/runs/${run.id}/resume`,{});toast('已继续当前研究。');await refresh(true);}catch(error){toast(error.message);}finally{button.disabled=!!state?.active_run;}});
+let forkSelection=null;
+function openFork(node){forkSelection={runId:run.id,nodeId:node.id};$('#fork-question').value='';$('#fork-routing').checked=false;$('#fork-description').textContent=node.legacy?'该历史记录没有检查点。新分支只继承提交材料与截至此处的记录作为上下文，重新收集证据并规划研究。':'恢复到该调用结束时的检查点，后续结果不会带入分支。';$('#fork-dialog').showModal();}
+$('#fork-form').addEventListener('submit',async event=>{event.preventDefault();if(!forkSelection)return;const button=$('#fork-submit');button.disabled=true;try{
+  if(state.active_run){await api(`/api/runs/${state.active_run}/pause`,{});button.textContent='等待当前研究暂停…';let paused=false;for(let i=0;i<200;i++){await new Promise(resolve=>setTimeout(resolve,1000));const latest=await api('/api/state');if(!latest.active_run){paused=true;break;}}if(!paused)throw Error('当前调用尚未结束，请稍后重试分支。');}
+  const created=await api(`/api/runs/${forkSelection.runId}/fork`,{node_id:forkSelection.nodeId,question:$('#fork-question').value,routing:$('#fork-routing').checked?(state.settings.routing||{}):undefined});$('#fork-dialog').close();await refresh(true);await selectRun(created.id);toast('已创建分支并继续研究。');
+}catch(error){toast(error.message);}finally{button.disabled=false;button.textContent='创建分支并继续';}});

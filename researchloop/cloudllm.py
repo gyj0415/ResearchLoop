@@ -70,6 +70,7 @@ class Cloud:
                 "max_tokens": max_output}
         if schema:
             body.update(JSON_OBJECT)
+            body["messages"][0]["content"] += "\n严格遵守此JSON Schema，只返回JSON：" + json.dumps(schema, ensure_ascii=False)
         started = time.perf_counter()
         item = {"purpose": purpose, "model": self.model, "source": "cloud",
                 "cloud": True, "reserved_upper_bound": reserve, "request": body}
@@ -89,10 +90,13 @@ class Cloud:
             item.update(input_tokens=usage["prompt_tokens"], output_tokens=usage["completion_tokens"],
                         cached_tokens=int(cached or 0), context_tokens=usage["prompt_tokens"],
                         cloud_cost=None, status="ok")
+            item["response"] = result
             content = _strip_fence(((result.get("choices") or [{}])[0].get("message") or {}).get("content", ""))
             parsed = json.loads(content)
         except Exception as exc:
-            item.update(status="error", error=str(exc), unknown_reserved=reserve)
+            item.update(status="error", error=str(exc))
+            if "input_tokens" not in item:
+                item["unknown_reserved"] = reserve
             raise RuntimeError(f"云端模型调用失败：{exc}") from exc
         finally:
             item["wall_seconds"] = round(time.perf_counter() - started, 3)

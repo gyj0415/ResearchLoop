@@ -111,14 +111,11 @@ class OperatorRunTests(unittest.TestCase):
                     child.unlink()
                 folder.rmdir()
 
-    def test_retrieval_summary_still_reads_metrics(self):
-        card = summary({"id": "r", "status": "completed", "task": "C", "experiments": [
-            {"result": {"metrics": {"complete_at_5": 0.5}}},
-            {"result": {"metrics": {"complete_at_5": 0.6}}},
-        ]})
-        self.assertEqual(card["domain"], "retrieval")
-        self.assertEqual(card["experiment_count"], 1)
-        self.assertEqual(card["baseline_metrics"]["complete_at_5"], 0.5)
+    def test_unknown_domain_summary_does_not_compute_retired_retrieval_metrics(self):
+        card = summary({"id": "r", "status": "completed", "task": "old"})
+        self.assertEqual(card["domain"], "unknown")
+        self.assertEqual(card["id"], "r")
+        self.assertNotIn("baseline_metrics", card)
 
 
 def _post(host, port, payload):

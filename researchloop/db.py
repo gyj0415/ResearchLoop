@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS tools(
     name TEXT PRIMARY KEY, description TEXT, schema_json TEXT, handler TEXT,
     source TEXT, enabled INTEGER, registered_at TEXT);
 CREATE INDEX IF NOT EXISTS memory_scope ON memory_items(scope, status);
+CREATE TABLE IF NOT EXISTS invocations(
+    session_id TEXT, node_id TEXT, seq INTEGER, kind TEXT, parent_id TEXT,
+    turn TEXT, status TEXT, checkpoint TEXT, body_json TEXT,
+    PRIMARY KEY(session_id, node_id));
 """
 
 
@@ -154,6 +158,18 @@ def sync_run(run):
                (session, agent.get("id"), agent.get("role"), agent.get("goal"), agent.get("model"),
                 agent.get("model_source"), agent.get("status"),
                 json.dumps(agent.get("steps") or [], ensure_ascii=False)))
+    if run.get("trace"):
+        with LOCK:
+            connection = _connect()
+            try:
+                connection.executemany("""INSERT OR REPLACE INTO invocations
+                    (session_id,node_id,seq,kind,parent_id,turn,status,checkpoint,body_json)
+                    VALUES(?,?,?,?,?,?,?,?,?)""", [(session, node["id"], node.get("seq"), node.get("kind"),
+                    node.get("parent_id"), node.get("turn"), node.get("status"), node.get("checkpoint"),
+                    json.dumps(node, ensure_ascii=False)) for node in run["trace"]])
+                connection.commit()
+            finally:
+                connection.close()
 
 
 def sessions(limit=50):
@@ -167,6 +183,11 @@ def session(session_id):
 
 def calls(session_id):
     return _read("SELECT * FROM calls WHERE session_id=? ORDER BY idx", (session_id,))
+
+
+def invocations(session_id):
+    return [json.loads(row["body_json"]) for row in _read(
+        "SELECT body_json FROM invocations WHERE session_id=? ORDER BY seq", (session_id,))]
 
 
 def steps(session_id):
@@ -229,7 +250,7 @@ def migrate_memory_files():
     if _read("SELECT COUNT(*) AS n FROM memory_items")[0]["n"]:
         return 0
     imported = 0
-    for folder, scope in ((storage.MEMORY, "retrieval"), (storage.MEMORY / "research", "research")):
+    for folder, scope in ((storage.MEMORY / "research", "research"),):
         for file in sorted(folder.glob("v*.json")):
             value = storage.read_json(file) or {}
             memory_add(session_id=None, version=value.get("version"), scope=scope,

@@ -65,13 +65,11 @@ def remember_fact(engine, args):
 
 
 def get_memory_context(engine, args):
-    query = str(args.get("query") or engine.run["question"]).strip()
-    rows = facts.match(query, scope="research", limit=4)
-    engine.run["memory_context"] = {
-        "query": query,
-        "facts": [{key: row.get(key) for key in
-                   ("id", "predicate", "object", "summary", "confidence", "last_confirmed_at")} for row in rows],
-        "text": facts.format_context(rows)}
+    from .. import memory
+    query = str(args.get("query") or engine.question_text()).strip()
+    if engine.run.get("memory_mode") == "disabled":
+        return {"query": query, "facts": [], "method": None, "text": "", "note": "本轮显式关闭历史记忆召回"}
+    engine.run["memory_context"] = memory.recall(query)
     return engine.run["memory_context"]
 
 
