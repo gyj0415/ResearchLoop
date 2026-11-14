@@ -140,6 +140,20 @@ class AgentToolTests(unittest.TestCase):
         self.assertTrue(repeat['check']['passed'])
         self.assertIn('冻结工作区',repeat['protocol'])
 
+    def test_unconfigured_strong_tier_uses_session_model_when_routing_disabled(self):
+        self.engine.run['routing'] = {'enabled': False, 'profiles': {
+            'light': {'model': '', 'model_source': 'local'},
+            'strong': {'model': '', 'model_source': 'local'}}}
+        self.engine.apply('design_workflow', {
+            'reason': '未启用按调用选择模型时，未配置的 strong 档应被忽略',
+            'stages': [{'role': 'analyst', 'goal': '检查现有材料并记录证据缺口',
+                        'why': '确认关闭路由后不会因空的 strong 档失败', 'model_tier': 'strong'}]})
+        self.engine.run['active_agent'] = {'model_tier': 'strong', 'model': self.engine.run['model'],
+                                           'model_source': self.engine.run.get('model_source', 'local')}
+        chosen = routing.choose(self.engine, 'agent_step', {})
+        self.assertEqual(chosen['model'], self.engine.run['model'])
+        self.assertEqual(chosen['tier'], 'default')
+
     def test_tier_can_be_selected_even_when_automatic_routing_disabled(self):
         self.engine.apply('select_model',{'model_tier':'strong','reason':'测试编排'})
         self.assertEqual(routing.choose(self.engine,'agent_step',{})['model'],'fixture-strong')
