@@ -4,7 +4,7 @@ const previousTop=renderTop, previousMetrics=renderMetrics, previousRun=renderRu
 
 renderTop=function(){
   previousTop();
-  $('#dataset-summary').textContent=`${state.research_tools?.length||0} 项工具可用 · 当前会话 ${run?.assets?.length||0} 份材料`;
+  $('#dataset-summary').textContent=`${state.research_tools?.length||0} 项研究工具 · 当前会话 ${run?.assets?.length||0} 份材料`;
   if(page==='data')$('#page-label').textContent='材料与工具';
   $('#draft-brief').disabled=!!state.active_run;
   const modelSelect=$('#research-model');
@@ -191,9 +191,9 @@ function renderChain(run){
     const source=s.source==='cloud'?'云端':s.source==='controller'?'控制器':'本地';
     const usage=s.usage||{},tokens=(usage.input_tokens||0)+(usage.output_tokens||0)+(usage.unknown_reserved||0);
     const duration=`${typeof seconds==='number'?seconds.toFixed(2)+'s':'等待结果'}${model?' · '+number(tokens)+' token':''}`;
-    const error=s.output?.error||'';
+    const error=s.output?.error||'',recovery=s.output?.recovery;
     const forkable=s.status!=='running'&&(s.checkpoint||s.legacy);
-    return `<details class="chain-step ${esc(s.status||'')} ${model?'chain-model':'chain-tool-call'}" data-step-key="${esc(key)}" ${open.has(key)?'open':''}><summary class="chain-summary"><span class="chain-index">${index+1}</span><span class="chain-content"><span class="chain-heading"><strong class="chain-tool">${esc(title)}</strong><span class="invocation-kind ${model?'model':''}">${model?'模型请求':s.kind==='decision_error'?'决策错误':'工具'}</span><span class="chain-status ${failed?'failed':''}">${esc(statuses[s.status]||s.status)}</span><span class="chain-agent">${esc(source)}${s.role?' · '+esc(roleLabel(s.role)):''}</span></span><span class="chain-reason">${esc(s.route?.reason||s.reason||s.purpose||'')}</span>${error?`<span class="chain-error">${esc(String(error).slice(0,220))}</span>`:''}</span><span class="chain-duration">${esc(duration)}</span><span class="chain-chevron" aria-hidden="true">⌄</span></summary><div class="chain-body">${s.route?`<p class="call-routing">模型路由：${esc(s.route.tier==='strong'?'高能力档':s.route.tier==='light'?'轻量档':'默认模型')} · ${esc(s.route.reason)}</p>`:''}<div class="chain-io"><section><h3>输入</h3><pre>${esc(JSON.stringify(s.input??{},null,2))}</pre></section><section><h3>输出</h3><pre>${esc(JSON.stringify(s.output??{},null,2))}</pre></section></div><div class="chain-detail-meta"><span>${esc(s.id)}${s.turn?' · '+esc(s.turn):''}${s.parent_id?' · 由 '+esc(s.parent_id)+' 决策':''}${s.inherited_from?' · 继承自原会话':''}</span><div><button type="button" class="small-link" data-chain-raw="${esc(s.id)}">原始记录</button>${forkable?`<button type="button" class="secondary-button fork-record" data-fork-node="${esc(s.id)}">从此处分支</button>`:''}</div></div></div></details>`;
+    return `<details class="chain-step ${esc(s.status||'')} ${model?'chain-model':'chain-tool-call'}" data-step-key="${esc(key)}" ${open.has(key)?'open':''}><summary class="chain-summary"><span class="chain-index">${index+1}</span><span class="chain-content"><span class="chain-heading"><strong class="chain-tool">${esc(title)}</strong><span class="invocation-kind ${model?'model':''}">${model?'模型请求':s.kind==='decision_error'?'决策错误':'工具'}</span><span class="chain-status ${failed?'failed':''}">${esc(statuses[s.status]||s.status)}</span><span class="chain-agent">${esc(source)}${s.role?' · '+esc(roleLabel(s.role)):''}</span></span><span class="chain-reason">${esc(s.route?.reason||s.reason||s.purpose||'')}${s.attempt>1?' · 第 '+s.attempt+' 次尝试':''}</span>${recovery?`<span class="call-recovery">${esc(recovery.action==='retry'?'已安排有限重试':recovery.action==='switch_source'?'已停用当前服务配置，选择替代来源':recovery.action==='defer'?'剩余预算不允许立即重试':'等待修正决策')} · ${esc(recovery.message)}</span>`:''}${error?`<span class="chain-error">${esc(String(error).slice(0,220))}</span>`:''}</span><span class="chain-duration">${esc(duration)}</span><span class="chain-chevron" aria-hidden="true">⌄</span></summary><div class="chain-body">${s.route?`<p class="call-routing">模型路由：${esc(s.route.tier==='fallback'?'回退模型':s.route.tier==='strong'?'高能力档':s.route.tier==='light'?'轻量档':'默认模型')} · ${esc(s.route.reason)}</p>`:''}<div class="chain-io"><section><h3>输入</h3><pre>${esc(JSON.stringify(s.input??{},null,2))}</pre></section><section><h3>输出</h3><pre>${esc(JSON.stringify(s.output??{},null,2))}</pre></section></div><div class="chain-detail-meta"><span>${esc(s.id)}${s.turn?' · '+esc(s.turn):''}${s.parent_id?' · 由 '+esc(s.parent_id)+' 决策':''}${s.inherited_from?' · 继承自原会话':''}</span><div><button type="button" class="small-link" data-chain-raw="${esc(s.id)}">原始记录</button>${forkable?`<button type="button" class="secondary-button fork-record" data-fork-node="${esc(s.id)}">从此处分支</button>`:''}</div></div></div></details>`;
   }).join(''):empty('暂无匹配的调用','开始研究或调整筛选条件。');
   $$('[data-chain-raw]').forEach(button=>button.onclick=()=>showDetail('调用记录',records.find(s=>s.id===button.dataset.chainRaw)));
   $$('[data-fork-node]').forEach(button=>button.onclick=()=>openFork(records.find(s=>s.id===button.dataset.forkNode)));
@@ -268,7 +268,7 @@ $('#followup-send')?.addEventListener('click',async()=>{
   }catch(error){toast(error.message);}finally{button.disabled=false;}
 });
 
-Object.assign(statuses,{pausing:'正在暂停',paused:'已暂停',incomplete:'未完成',inconclusive:'证据不足'});
+Object.assign(statuses,{pausing:'正在暂停',paused:'已暂停',incomplete:'未完成',inconclusive:'证据不足',done:'阶段结束'});
 $('#chain-kind').addEventListener('change',event=>{chainView.kind=event.target.value;renderChain(run);});
 $('#session-pause').addEventListener('click',async()=>{try{await api(`/api/runs/${run.id}/pause`,{});toast('已请求暂停，等待当前调用结束。');await refresh(true);}catch(error){toast(error.message);}});
 $('#session-resume').addEventListener('click',async()=>{const button=$('#session-resume');button.disabled=true;try{await api(`/api/runs/${run.id}/resume`,{});toast('已继续当前研究。');await refresh(true);}catch(error){toast(error.message);}finally{button.disabled=!!state?.active_run;}});

@@ -1,5 +1,5 @@
 """Per-request routing; roles remain independent of model capacity tiers."""
-from researchloop import storage
+from researchloop import storage, reliability
 
 
 def clean(value):
@@ -37,5 +37,15 @@ def choose(engine, purpose, prompt):
                 tier = "default"
         else:
             tier, reason = "default", reason + "；该档未配置，沿用当前模型"
+    if reliability.blocked(engine.run, "llm:" + source, storage.settings()):
+        if source == "cloud":
+            local = next((p["model"] for p in (policy.get("profiles") or {}).values()
+                          if p.get("model_source") == "local" and p.get("model")), storage.settings().get("model"))
+            if local and not reliability.blocked(engine.run, "llm:local", storage.settings()):
+                model, source, tier, reason = local, "local", "fallback", "云端请求鉴权失败，回退到已配置的本地模型"
+            else:
+                raise reliability.Failure("云端不可用，且没有可用的已配置本地回退模型", resource="llm:cloud", repairable=False, blocked=True)
+        else:
+            raise reliability.Failure("本地模型不可用，请修复模型配置后继续", resource="llm:local", repairable=False, blocked=True)
     return {"model": model, "model_source": source, "tier": tier, "reason": reason,
             "policy": "rules-v1", "role": role, "agent": agent}

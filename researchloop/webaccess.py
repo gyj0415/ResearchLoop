@@ -140,7 +140,13 @@ def _time_range(recency):
     return "" if value == "any" else value
 
 
-def search(query, provider="searxng", endpoint="", api_key="", max_results=5, recency="any", timeout=TIMEOUT):
+def validate_search_config(provider, endpoint):
+    host = (urllib.parse.urlparse(str(endpoint or "").strip()).hostname or "").lower()
+    if provider == "searxng" and (host == "api.tavily.com" or host.endswith(".tavily.com")):
+        raise ValueError("搜索提供方为 SearXNG，但地址是 Tavily 接口；请将提供方改为 Tavily，使用正确的请求协议和 API Key。")
+
+
+def _search(query, provider="searxng", endpoint="", api_key="", max_results=5, recency="any", timeout=TIMEOUT):
     text = str(query or "").strip()
     if not text:
         raise ValueError("搜索需要关键词")
@@ -149,6 +155,7 @@ def search(query, provider="searxng", endpoint="", api_key="", max_results=5, re
     limit = max(1, min(int(max_results or 5), MAX_RESULTS))
     window = _time_range(recency)
     provider = str(provider or "searxng").strip().lower()
+    validate_search_config(provider, endpoint)
     if provider == "searxng":
         base = str(endpoint or "").strip()
         if not base:
@@ -188,3 +195,11 @@ def search(query, provider="searxng", endpoint="", api_key="", max_results=5, re
     rows = [row for row in rows if row["url"]][:limit]
     return {"provider": provider, "query": text, "results": rows,
             "answer": str(payload.get("answer") or "").strip() if provider == "tavily" else ""}
+
+
+def search(query, provider="searxng", endpoint="", api_key="", max_results=5, recency="any", timeout=TIMEOUT):
+    from . import reliability
+    try:
+        return _search(query, provider, endpoint, api_key, max_results, recency, timeout)
+    except Exception as error:
+        raise reliability.wrap(error, "search:" + str(provider or "searxng")) from error

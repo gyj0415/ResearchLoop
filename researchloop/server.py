@@ -262,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
                     if value_int < floor or value_int > 10_000_000:
                         raise ValueError(f"{label}必须在 {floor}–10000000 之间")
                     limits[key] = value_int
-                value = {"ollama_url": url, "model": model, "model_source": source, "cloud": value_cloud,
+                if web_value["enabled"]:
+                    webaccess.validate_search_config(web_value["search_provider"], web_value["search_endpoint"])
+                value = {"revision": uuid.uuid4().hex, "ollama_url": url, "model": model, "model_source": source, "cloud": value_cloud,
                          "roles": cleaned_roles, "web": web_value, "limits": limits,
                          "routing": research_core.routing.clean(body.get("routing") or settings().get("routing"))}
                 write_json(ROOT / "config.json", value)

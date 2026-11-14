@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 
 from .ollama import BudgetError
+from . import llmjson
 
 JSON_OBJECT = {"response_format": {"type": "json_object"}}
 
@@ -44,13 +45,6 @@ def probe(base_url, api_key, timeout=8):
         return {"available": False, "models": [], "error": str(exc), "base_url": str(base_url or "")}
 
 
-def _strip_fence(content):
-    content = (content or "").strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    return content
-
-
 class Cloud:
     """Minimal chat-completions client with the same budget accounting as Ollama."""
 
@@ -61,8 +55,8 @@ class Cloud:
         self.budget = budget
         self.on_call = on_call
 
-    def call(self, system, prompt, schema, purpose, seed=None, max_output=1500):
-        reserve = 6144 + max_output
+    def call(self, system, prompt, schema, purpose, seed=None, max_output=1500, reserve=None):
+        reserve = reserve or 6144 + max_output
         self.budget.reserve(reserve)
         body = {"model": self.model, "temperature": 0, "stream": False,
                 "messages": [{"role": "system", "content": system},
@@ -91,8 +85,8 @@ class Cloud:
                         cached_tokens=int(cached or 0), context_tokens=usage["prompt_tokens"],
                         cloud_cost=None, status="ok")
             item["response"] = result
-            content = _strip_fence(((result.get("choices") or [{}])[0].get("message") or {}).get("content", ""))
-            parsed = json.loads(content)
+            content = ((result.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+            parsed = llmjson.parse(content)
         except Exception as exc:
             item.update(status="error", error=str(exc))
             if "input_tokens" not in item:

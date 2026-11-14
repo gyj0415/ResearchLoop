@@ -56,10 +56,14 @@ def web_fetch(engine, args):
 
 
 def remember_fact(engine, args):
+    ids = args.get("evidence_ids")
+    allowed = set(engine.memory_evidence_ids())
+    if not isinstance(ids, list) or not ids or any(identifier not in allowed for identifier in ids):
+        raise ValueError("研究事实记忆必须绑定已有材料、来源或已复核实验的 evidence_ids；未核实判断不能写成事实。偏好可在记忆页面添加。")
     fact = facts.remember(engine.run["id"], str(args.get("predicate") or ""), str(args.get("object") or ""),
                           str(args.get("summary") or ""), tags=args.get("tags"),
                           confidence=args.get("confidence") or 0.6,
-                          source_message=str(args.get("source_message") or engine.run["question"]))
+                          source_message=str(args.get("source_message") or engine.run["question"]) + "\n证据ID：" + ", ".join(ids))
     return {"id": fact["id"], "predicate": fact["predicate"], "object": fact["object"],
             "summary": fact["summary"], "status": fact["status"]}
 
@@ -77,7 +81,10 @@ def platform_search(engine, args):
     from .. import platforms
     platform = str(args.get("platform") or "").strip().lower()
     query = str(args.get("query") or "").strip()
-    result = platforms.search(platform, query, limit=args.get("limit") or 5)
+    from .. import reliability
+    cfg = storage.settings()
+    disabled = [key for key in engine.run.get("resource_health", {}) if reliability.blocked(engine.run, key, cfg)]
+    result = platforms.search(platform, query, limit=args.get("limit") or 5, blocked_resources=disabled)
     for row in result["results"]:
         row["id"] = f"p{len(engine.run['sources']) + 1}"
         row["evidence_scope"] = f"{result['label']}平台检索结果（平台内容，不是同行评议）"
@@ -96,9 +103,9 @@ registry.register_tool("web_fetch", web_fetch,
                        arguments={"url": "要读取的 URL", "reason": "为什么需要读取", "max_chars": 6000},
                        required=["url", "reason"])
 registry.register_tool("remember_fact", remember_fact,
-                       description="写入或确认长期事实记忆；只写明确出现的事实，不写推测。",
+                       description="基于已有证据ID写入或确认研究事实记忆；必须附evidence_ids，不能将推测或检索失败后的判断写成事实。",
                        arguments={"predicate": "事实谓词", "object": "事实对象", "summary": "简短摘要",
-                                  "tags": ["标签"], "confidence": 0.6}, required=["predicate", "object", "summary"])
+                                  "tags": ["标签"], "confidence": 0.6, "evidence_ids": ["p1"]}, required=["predicate", "object", "summary", "evidence_ids"])
 registry.register_tool("get_memory_context", get_memory_context,
                        description="按查询召回事实记忆，返回适用条件与证据来源。",
                        arguments={"query": "检索文本"}, required=[])

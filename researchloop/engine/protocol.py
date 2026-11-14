@@ -23,6 +23,10 @@ def validate(value, schema, path="args"):
             if key in properties:
                 validate(item, properties[key], f"{path}.{key}")
     if kind == "array":
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            raise ValueError(f"{path} 至少需要 {schema['minItems']} 项")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            raise ValueError(f"{path} 最多允许 {schema['maxItems']} 项；没有证据时请使用空数组")
         for index, item in enumerate(value):
             validate(item, schema.get("items", {}), f"{path}[{index}]")
 

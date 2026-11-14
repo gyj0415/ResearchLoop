@@ -90,7 +90,7 @@ def plan(engine):
               "roles": roles.describe(),
               "instruction": "只输出stages数组：为完成这个研究问题选择1–6个阶段，每个阶段给出role、goal、max_steps。"
                              "定性或文献问题可以没有实验阶段；需要数值实验时必须有experimenter，复核与报告应在实验之后。"
-                             "每个阶段必须写 why：为什么需要这个阶段、它解决什么问题。不要编造材料中没有的数据。"}
+                             "每个阶段必须写 why：为什么需要这个阶段、它解决什么问题。阶段目标不能预设尚未核实的结论；先验证问题前提或出处。不要编造材料中没有的数据。"}
     attempts = []
     stages = None
     source = "default"

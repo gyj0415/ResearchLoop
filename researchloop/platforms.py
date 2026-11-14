@@ -103,7 +103,7 @@ def _site_search(platform, query, limit, web):
     return results
 
 
-def search(platform, query, limit=5, timeout=10):
+def _search(platform, query, limit=5, timeout=10, blocked_resources=()):
     from . import storage
     name = str(platform or "").strip().lower()
     text = str(query or "").strip()
@@ -113,6 +113,7 @@ def search(platform, query, limit=5, timeout=10):
         raise ValueError(f"未知平台 {name}；可用：{'、'.join(PLATFORMS)}")
     label = PLATFORMS[name]["label"]
     web = (storage.settings() or {}).get("web") or {}
+    search_resource = "search:" + str(web.get("search_provider") or "searxng")
     if name == "bilibili":
         results = _bilibili(text, limit, timeout)
         note = "Bilibili 公开搜索接口；视频标题/播放量是平台展示值，不等于研究结论。"
@@ -121,12 +122,25 @@ def search(platform, query, limit=5, timeout=10):
             results = _tieba(text, limit, timeout)
             note = "贴吧公开检索页；只解析帖子标题与链接，未采集帖内用户内容。"
         except Exception:
+            if search_resource in blocked_resources:
+                raise ValueError("贴吧直连失败，备用搜索服务当前配置已被停用；请改用其他来源")
             results = _site_search(name, text, limit, web)
             note = "贴吧直连被反爬拦截，改用站内限定搜索。"
     else:
+        if search_resource in blocked_resources:
+            from .reliability import Failure
+            raise Failure("该平台依赖的搜索服务已鉴权失败，请改用可用来源或修复配置", resource=search_resource, blocked=True)
         results = _site_search(name, text, limit, web)
         note = f"{label}需要登录或反爬保护，未直接抓取平台内容；结果来自 site:{PLATFORMS[name]['site']} 的站内限定搜索。"
     if not results:
         raise ValueError(f"{label}检索没有返回结果（关键词、登录或反爬限制），未编造内容")
     return {"platform": name, "label": label, "query": text, "results": results[:max(1, min(int(limit or 5), 10))],
             "note": note}
+
+
+def search(platform, query, limit=5, timeout=10, blocked_resources=()):
+    from . import reliability
+    try:
+        return _search(platform, query, limit, timeout, blocked_resources)
+    except Exception as error:
+        raise reliability.wrap(error, "platform:" + str(platform)) from error

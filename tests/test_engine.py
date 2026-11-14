@@ -202,3 +202,57 @@ class ResearchEngineTests(unittest.TestCase):
         with patch("researchloop.storage.settings", return_value=stricter):
             with self.assertRaises(ValueError):
                 core.create({"question": "研究样本量对估计误差的影响", "token_limit": 300000})
+
+    def test_finish_is_hidden_until_a_plan_exists_once_evidence_collected(self):
+        engine = self.engine()
+        engine.run["evidence_collected"] = True
+        engine.run["sources"] = [{"id": "p1", "title": "x", "url": "https://example.com/a",
+                                  "abstract": "a", "evidence_scope": "摘要"}]
+        names = engine.available_tools()
+        self.assertNotIn("finish", names)
+        self.assertIn("plan", names)
+        engine.run["plan"] = {"feasible": True, "method": "m", "limitations": "", "literature_query": "",
+                              "research_kind": "literature"}
+        self.assertIn("finish", engine.available_tools())
+
+    def test_wrap_up_reserve_restricts_tools_to_finish(self):
+        engine = self.engine(token_limit=20000)
+        engine.run["plan"] = {"feasible": True, "method": "m", "limitations": "", "literature_query": "",
+                              "research_kind": "literature"}
+        engine.run["sources"] = [{"id": "p1", "title": "x", "url": "https://example.com/a"}]
+        engine.run["steps"] = [{"id": "s1", "tool": "inspect", "status": "completed", "turn": "t1",
+                                "agent": None, "elapsed_seconds": 0}]
+        engine.budget.input_tokens = 15000
+        self.assertEqual(engine.available_tools(), ["finish"])
+
+    def test_kind_is_inferred_for_web_evidence_without_plan(self):
+        engine = self.engine()
+        engine.run["sources"] = [{"id": "p1", "title": "报道", "url": "https://news.example.com/a",
+                                  "abstract": "内容", "evidence_scope":
+                                  "网页搜索摘要（tavily），媒体/平台内容，不是同行评议"}]
+        engine.run["plan"] = None
+        result = engine.apply("finish", {"conclusion": "依据本轮网页证据只能说明存在公开报道，不推断传播效果。",
+                                         "citations": ["p1"], "lesson": ""})
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(engine.run["research_kind"], "mixed")
+
+    def test_unfinished_evidence_run_ends_with_a_gap_report(self):
+        engine = self.engine(max_steps=1)
+        engine.run["sources"] = [{"id": "p1", "title": "x", "url": "https://example.com/a",
+                                  "abstract": "a", "evidence_scope": "摘要"}]
+        engine.decide = lambda: {"tool": "inspect", "args": {}}
+        result = engine.execute()
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertIn("未完成", result["report"]["conclusion"])
+        self.assertTrue((engine.folder / "report.md").exists())
+
+    def test_metric_must_be_a_short_identifier(self):
+        engine = self.engine()
+        engine.run["evidence_collected"] = True
+        with self.assertRaises(ValueError):
+            engine.apply("hypothesis", {"statement": "s", "prediction": "p", "controls": "c",
+                                        "metric": "过滤相对未过滤的下游线性探测精度绝对增益",
+                                        "relation": "gt", "threshold": 1.0})
+        item = engine.apply("hypothesis", {"statement": "s", "prediction": "p", "controls": "c",
+                                           "metric": "delta_accuracy", "relation": "gt", "threshold": 1.0})
+        self.assertEqual(item["metric"], "delta_accuracy")

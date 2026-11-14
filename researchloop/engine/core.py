@@ -2,7 +2,9 @@
 import hashlib
 import json
 import base64
+import copy
 import math
+import re
 import secrets
 import threading
 import time
@@ -18,7 +20,7 @@ from researchloop.engine import roles
 from researchloop.engine import workflow as workflow_module
 from researchloop.engine import extratools  # registers web_search/web_fetch/remember_fact/get_memory_context
 from researchloop.engine import doctools  # registers read_docx/read_pptx/read_pdf
-from researchloop import facts, memory
+from researchloop import facts, memory, reliability, llmjson
 from researchloop.ollama import Budget, BudgetError
 from . import tools
 from . import protocol, routing, history
@@ -34,7 +36,9 @@ Python只能用np(numpy)、math、statistics；随机数必须用提供的rng。
 假设必须给出statement,prediction,controls,metric,relation(gt/ge/lt/le),threshold。实验必须关联hypothesis_id。
 可以证伪假设；复核未通过阈值是有效负结果。你不能修改已经注册的阈值或冻结的复核代码。
 finish写出结论、局限、引用IDs和lesson；只有引用已复核实验才形成实验报告。缺工具/材料时明确未完成。
-自主选择下一项工具；严格返回 {"tool":"工具名","reason":"选择依据","args":{工具参数}}，不要把参数直接放在顶层。定性和文献问题可以采用证据分析，无须强行运行数值实验。"""
+自主选择下一项工具；严格返回 {"tool":"工具名","reason":"选择依据","args":{工具参数}}，不要把参数直接放在顶层。定性和文献问题可以采用证据分析，无须强行运行数值实验。
+异常或玩笑式提问也应先核实前提、语境或出处，不能在取得证据前直接认定它是梗或无研究价值。工作流目标也是待检验设想，不是已知事实。
+记忆和错误日志不是研究证据；finish.citations只能从allowed_citation_ids选择，没有证据时用[]明确报告未完成。401/403应换来源或修复配置，不能只改关键词重复访问同一服务。"""
 
 ACTION_SCHEMA = {"type": "object", "properties": {
     "tool": {"type": "string", "enum": [t["name"] for t in tools.TOOLS]}, "reason": {"type": "string"},
@@ -177,6 +181,11 @@ class ResearchEngine:
         if self.pause_requested.is_set():
             raise history.Paused()
 
+    def reserve_for(self, system, text, max_output=1500):
+        """Conservative reservation: CJK prompts cost roughly one token per 2 characters."""
+        chars = len(system or "") + len(text or "")
+        return max(2048, chars // 2) + int(max_output)
+
     def complete(self, system, prompt, schema, purpose="research_decision", role=None):
         """One admitted request, one trace record, including failed attempts."""
         cached = self.run.pop("pending_response", None)
@@ -188,7 +197,9 @@ class ResearchEngine:
         route = routing.choose(self, purpose, prompt)
         model, source = route["model"], route["model_source"]
         text = json.dumps(prompt, ensure_ascii=False) if isinstance(prompt, (dict, list)) else str(prompt)
-        self.budget.reserve(7644)
+        reserve = self.reserve_for(system, text)
+        self.last_reserve = reserve
+        self.budget.reserve(reserve)
         node = history.begin(self, "model_call", model=model, source=source, route=route,
                              role=role or route["role"], agent=route["agent"], purpose=purpose,
                              input={"system": system, "prompt": prompt, "schema": schema})
@@ -203,7 +214,7 @@ class ResearchEngine:
                 def capture(value):
                     item.update(value)
                 client = cloudllm.Cloud(storage.settings()["cloud"], model, self.budget, on_call=capture)
-                parsed, _ = client.call(system, text, schema, purpose, self.run.get("seed"))
+                parsed, _ = client.call(system, text, schema, purpose, self.run.get("seed"), reserve=reserve)
             else:
                 body = {"model": model, "stream": False, "think": False, "format": schema,
                         "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}],
@@ -218,11 +229,13 @@ class ResearchEngine:
                 item.update(input_tokens=result["prompt_eval_count"], output_tokens=result["eval_count"],
                             cached_tokens=result.get("prompt_eval_cached_count", 0),
                             context_tokens=result["prompt_eval_count"], status="ok")
-                parsed = json.loads(result.get("message", {}).get("content", ""))
+                parsed = llmjson.parse(result.get("message", {}).get("content", ""))
             self.run["pending_response"] = {"purpose": purpose, "parsed": parsed, "call": dict(item)}
             return parsed, item
         except Exception as error:
             item.update(status="error", error=str(error))
+            failure = reliability.classify(error, "llm:" + source)
+            reliability.record(self.run, failure, storage.settings(), self.turn_id)
             self.run["decision_feedback"] = {"model_error": str(error), "purpose": purpose}
             if source != "cloud" and "input_tokens" not in item:
                 item["unknown_reserved"] = 7644
@@ -275,32 +288,64 @@ class ResearchEngine:
         for name in names:
             entry = registry.get(name) or {}
             properties, required = ARGUMENTS.get(name, ({}, []))
+            properties = copy.deepcopy(properties)
+            if name == "platform_search":
+                properties["platform"]["enum"] = self.available_platforms()
+            if name in ("finish", "remember_fact"):
+                field = "citations" if name == "finish" else "evidence_ids"
+                properties[field] = {"type": "array", "items": {"type": "string"}}
+                identifiers = self.evidence_ids() if name == "finish" else self.memory_evidence_ids()
+                if identifiers:
+                    properties[field]["items"]["enum"] = identifiers
+                else:
+                    properties[field]["maxItems"] = 0
+                if name == "remember_fact":
+                    properties[field]["minItems"] = 1
+                    required = [*required, "evidence_ids"]
             catalog.append({"tool": name, "description": entry.get("description", ""),
                             "args_schema": {"type": "object", "properties": properties, "required": required, "additionalProperties": False}})
         return catalog
+
+    def evidence_ids(self):
+        return sorted({row["id"] for group in ("assets", "sources", "hypotheses", "experiments")
+                       for row in self.run.get(group, [])})
+
+    def memory_evidence_ids(self):
+        return sorted({row["id"] for group in ("assets", "sources") for row in self.run.get(group, [])} |
+                      {row["id"] for row in self.run.get("experiments", []) if row.get("verification")})
 
     def agent_step(self):
         """The model chooses the next tool itself; the controller only gates validity."""
         run = self.run
         options = self.available_tools()
         schema = protocol.action_schema(self.tool_catalog(options))
-        observations = [{"tool": step["tool"], "status": step["status"], "observation": step["observation"]}
-                        for step in run["steps"][-4:]]
+        def compact(value, limit=600):
+            raw = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value or "")
+            return raw[:limit]
+
+        observations = [{"tool": step["tool"], "status": step["status"],
+                         "observation": compact(step.get("observation"), 500)}
+                        for step in run["steps"][-3:]]
         prompt = {"question": self.question_text(), "branch_note": run.get("branch_note"),
-                  "branch_context": run.get("branch_context"), "decision_feedback": run.get("decision_feedback"), "plan": run.get("plan"),
-                  "research_kind": run.get("research_kind"), "assets": run["assets"],
-                  "documents": run.get("documents", []), "hypotheses": run["hypotheses"],
+                  "branch_context": run.get("branch_context"), "decision_feedback": run.get("decision_feedback"),
+                  "recovery": run.get("recovery_feedback"), "allowed_citation_ids": self.evidence_ids(),
+                  "citation_policy": "记忆ID不能引用。无证据可用时必须 citations=[]，说明尚未核实并以未完成状态收尾。", "plan": run.get("plan"),
+                  "research_kind": run.get("research_kind"), "assets": run["assets"][:4],
+                  "documents": run.get("documents", [])[:6], "hypotheses": run["hypotheses"][:6],
                   "experiments": [{key: experiment.get(key) for key in
                                    ("id", "hypothesis_id", "status", "check", "verification", "error")}
-                                  for experiment in run["experiments"]],
+                                  for experiment in run["experiments"][-6:]],
                   "evidence": [{key: source.get(key) for key in ("id", "title", "evidence_scope")}
-                               for source in run["sources"]],
-                  "memory": run.get("memory_context"), "experience": run.get("experience"),
+                               for source in run["sources"][-12:]],
+                  "evidence_count": len(run["sources"]),
+                  "memory": {"text": str((run.get("memory_context") or {}).get("text") or "")[:1200]}
+                  if run.get("memory_context") else None,
+                  "experience": compact(run.get("experience"), 1200) if run.get("experience") else None,
                   "observations": observations, "budget": self.budget.snapshot(),
                   "allowed_tools": self.tool_catalog(options),
                   "instruction": "你决定下一步：从allowed_tools选一个tool并给出符合其args_schema的args。"
-                                 "证据不足可以继续检索或读取材料；实验完成后应复核；只有形成可引用结论时才finish。"
-                                 "没有真实数据就明确说明并finish，不要用模拟或计数替代真实证据。"
+                                 "证据不足可继续取证；实验完成后应复核。有证据时引用合法ID形成结论。"
+                                 "若证据或服务不足，允许finish(citations=[])如实报告尚未核实和未完成；不要用模拟或计数替代真实证据。"
                                  "如果需要多阶段编排，先调用design_workflow并写明每个阶段的设计理由。"}
         correction = ""
         for attempt in range(2):
@@ -312,6 +357,9 @@ class ResearchEngine:
             except Exception as error:
                 if attempt == 1:
                     raise RuntimeError(f"模型未返回可解析的决策：{error}") from error
+                failure = reliability.classify(error)
+                if failure.get("retryable"):
+                    self.wait_for_recovery(failure["retry_after"])
                 prompt["repair"] = {"error": str(error), "instruction": "重新返回满足schema的完整JSON对象"}
                 correction = "\n上次输出不是可解析的 JSON；只返回一个 JSON 对象，字段为 tool、reason、args。"
                 continue
@@ -332,6 +380,8 @@ class ResearchEngine:
                 self.run.pop("decision_feedback", None)
                 break
             self.run["decision_feedback"] = {"invalid_response": parsed, "errors": issues}
+            if tool == "finish":
+                self.run["draft_report"] = {"args": args, "errors": issues, "verified": False}
             check = history.begin(self, "decision_error", tool="validate_decision", source="controller",
                                   input=parsed, parent_id=item.get("node_id"), reason="校验模型选择与工具参数")
             history.settle(self, check, status="failed", output={"error": "；".join(issues)}, elapsed_seconds=0)
@@ -384,9 +434,12 @@ class ResearchEngine:
 
     def available_tools(self):
         run = self.run
+        reliability.check_search_config(run, storage.settings(), self.turn_id)
         agent = run.get("active_agent") or {}
         if run.get("workflow_mode") == "plan" and not run.get("workflow") and agent.get("id") == "g0":
             return ["get_memory_context", "inspect", "design_workflow"]
+        if self.in_wrap_up():
+            return ["finish"]
         names = []
 
         def add(*items):
@@ -421,12 +474,55 @@ class ResearchEngine:
                 add("experiment")
             if any(e.get("status") == "completed" and not e.get("verification") for e in run.get("experiments", [])):
                 add("verify")
-        add("remember_fact", "finish")
+        if run.get("sources") or run.get("assets") or any(e.get("verification") for e in run.get("experiments", [])):
+            add("remember_fact")
+        if run.get("plan") or not (run.get("sources") or run.get("assets") or run.get("experiments")):
+            add("finish")
         role = (agent.get("role") or "") if isinstance(agent, dict) else ""
         if role:
             permitted = set(roles.tools_for(role))
             names = [name for name in names if name in permitted]
+            if not names:
+                names = ["plan"] if not run.get("plan") else ["finish"]
+        cfg = storage.settings()
+        names = [name for name in names if name not in ("web_search", "literature") or
+                 not reliability.blocked(run, reliability.resource(name, {}, cfg), cfg)]
+        if "platform_search" in names and not self.available_platforms():
+            names.remove("platform_search")
         return names
+
+    def wrap_up_budget(self):
+        """Reserve enough room to write one evidence-gap report, not for exploration."""
+        reserve_tokens = max(9000, int(self.run["token_limit"] * 0.15))
+        reserve_seconds = max(30, min(90, int(self.run["seconds_limit"] * 0.15)))
+        return reserve_tokens, reserve_seconds
+
+    def in_wrap_up(self):
+        if not self.run.get("steps"):
+            return False
+        tokens, seconds = self.wrap_up_budget()
+        remaining = self.budget.token_limit - self.budget.used
+        # The next agent_step prompt is about as large as the previous one.
+        needed = max(tokens, getattr(self, "last_reserve", 0) + 2000)
+        return remaining <= needed or self.budget.seconds_limit - self.budget.elapsed <= seconds
+
+    def infer_kind(self):
+        run = self.run
+        scopes = [str(source.get("evidence_scope") or "") for source in run.get("sources", [])]
+        if run.get("documents") or any("网页正文" in scope or "网页搜索摘要" in scope for scope in scopes):
+            return "mixed"
+        if run.get("sources"):
+            return "literature"
+        if run.get("experiments"):
+            return "quantitative"
+        return "quantitative"  # nothing collected: keep the strict "incomplete" grade
+
+    def available_platforms(self):
+        cfg = storage.settings()
+        reliability.check_search_config(self.run, cfg, self.turn_id)
+        return [name for name in ARGUMENTS["platform_search"][0]["platform"]["enum"]
+                if (cfg["web"].get("enabled") or name in ("bilibili", "tieba")) and
+                not reliability.blocked(self.run, reliability.resource("platform_search", {"platform": name}, cfg), cfg)]
 
     def allowed_tools(self):
         agent = self.run.get("active_agent") or {}
@@ -460,8 +556,12 @@ class ResearchEngine:
             turn = next((item for item in self.run.get("turns", []) if item["id"] == self.turn_id), None)
             report_now = self.run.get("report") or {}
             if not str(report_now.get("conclusion") or "").strip():
-                report_now = {**report_now, "conclusion": self.run.get("stop_reason") or "本轮未形成可引用结论。"}
+                report_now = {**report_now, **self.failure_report()}
                 self.run["report"] = report_now
+                if self.run["status"] in ("running", "incomplete") and (
+                        self.run.get("sources") or self.run.get("documents") or self.run.get("experiments")):
+                    self.run["status"] = "inconclusive"
+                    self.run["stop_reason"] = self.run.get("stop_reason") or "达到步骤或预算上限，已生成证据缺口报告"
             if turn is not None:
                 turn["status"], turn["finished_at"] = self.run["status"], self.run["finished_at"]
                 turn["conclusion"] = str(report_now.get("conclusion", ""))[:1200]
@@ -475,76 +575,152 @@ class ResearchEngine:
             self.event("completed", f"研究结束：{self.run['status']}", status=self.run["status"])
         return self.run
 
-    def _loop(self, limit, mark_incomplete=True):
-        allowed = self.allowed_tools()
-        agent_id = (self.run.get("active_agent") or {}).get("id")
-        done = sum(1 for step in self.run["steps"][self.run.get("branch_step_start", 0):]
-                   if step.get("turn", "t1") == self.turn_id and step.get("agent") == agent_id)
-        for _ in range(max(0, int(limit) - done)):
+    def wait_for_recovery(self, delay):
+        if delay + 2 >= self.budget.seconds_limit - self.budget.elapsed:
+            raise BudgetError("剩余时间不足以等待服务重试，保留已有结果")
+        until = time.monotonic() + delay
+        while time.monotonic() < until:
             self.guard_pause()
-            total = sum(1 for step in self.run["steps"][self.run.get("branch_step_start", 0):]
-                        if step.get("turn", "t1") == self.turn_id)
-            if total >= self.run["max_steps"]:
-                self.run["status"], self.run["stop_reason"] = "incomplete", "达到研究步骤上限，保留已有证据"
-                return
-            index = len(self.run["steps"])
             if self.cancelled.is_set():
                 self.run["status"] = "cancelled"
                 return
-            if self.budget.elapsed >= self.run["seconds_limit"]:
-                raise BudgetError("研究时间预算耗尽")
-            self.event("progress", f"研究协议正在调度第 {index + 1} 步", status="running")
+            self.pause_requested.wait(min(.1, max(0, until - time.monotonic())))
+        self.guard_pause()
+
+    def _turn_steps(self):
+        return [step for step in self.run["steps"][self.run.get("branch_step_start", 0):]
+                if step.get("turn", "t1") == self.turn_id]
+
+    def _perform_tool(self, decision, retry=None):
+        """Only retry read-only transient failures; settle each physical call."""
+        tool, args = decision["tool"], decision.get("args", {})
+        retry = retry or {}
+        attempt = retry.get("attempt", 1)
+        retry_of = retry.get("retry_of")
+        if retry:
+            self.run["pending_tool_retry"] = retry
+            delay = max(0, retry.get("retry_at", 0) - time.time())
+            if delay:
+                self.wait_for_recovery(delay)
+        while True:
+            self.guard_pause()
+            if self.cancelled.is_set():
+                self.run["status"] = "cancelled"
+                return
+            if len(self._turn_steps()) >= self.run["max_steps"]:
+                self.run["status"], self.run["stop_reason"] = "incomplete", "达到研究步骤上限，保留已有证据"
+                return
+            if self.budget.elapsed >= self.budget.seconds_limit - 1:
+                raise BudgetError("时间预算耗尽，不再启动工具")
+            self.run.pop("pending_tool_retry", None)
+            self.run.pop("pending_decision", None)
+            self.run.pop("pending_response", None)
+            agent = self.run.get("active_agent") or {}
+            step = {"id": f"s{len(self.run['steps']) + 1}", "at": storage.now(), "tool": tool,
+                    "reason": decision.get("reason", ""), "args": args, "source": decision.get("source", "injected"),
+                    "agent": agent.get("id"), "role": agent.get("role"), "turn": self.turn_id,
+                    "attempt": attempt, "retry_of": retry_of}
+            node = history.begin(self, "tool_call", tool=tool, input=args, reason=step["reason"], source="local",
+                                 role=step["role"], agent=step["agent"], attempt=attempt, retry_of=retry_of,
+                                 parent_id=next((n["id"] for n in reversed(self.run.get("trace", [])) if n["kind"] == "model_call"), None))
+            step["node_id"] = node["id"]
+            started = time.perf_counter()
+            next_retry = None
             try:
-                decision = self.run.pop("pending_decision", None) or self.decide()
+                observation = self.apply(tool, args)
+                step.update(status="completed", observation=observation)
+                self.run.pop("recovery_feedback", None)
+            except Exception as error:
+                info = reliability.classify(error, reliability.resource(tool, args, storage.settings()))
+                delay = info.get("retry_after", .25)
+                can_retry = (tool in reliability.READ_TOOLS and info.get("retryable") and attempt < 2 and
+                             delay <= 30 and self.budget.seconds_limit - self.budget.elapsed > delay + 2 and
+                             len(self._turn_steps()) + 1 < self.run["max_steps"])
+                if info.get("retryable") and attempt >= 2:
+                    info["blocked"] = True
+                    info["message"] += " 已达到两次尝试上限，本轮改用其他来源。"
+                info["action"] = "retry" if can_retry else "switch_source" if info.get("blocked") else "repair_decision"
+                if info.get("retryable") and not can_retry and attempt < 2:
+                    info["action"] = "defer"
+                    info["message"] += " 当前预算或等待上限不允许立即重试。"
+                reliability.record(self.run, info, storage.settings(), self.turn_id)
+                step.update(status="failed", observation={"error": str(error), "recovery": info,
+                            "instruction": info["message"] + "；只能使用真实证据，必要时明确未完成。"})
+                if can_retry:
+                    next_retry = {"decision": decision, "attempt": attempt + 1, "retry_of": node["id"],
+                                  "retry_at": time.time() + delay}
+                    self.run["pending_tool_retry"] = next_retry
+            step["elapsed_seconds"] = round(time.perf_counter() - started, 3)
+            self.run["steps"].append(step)
+            history.settle(self, node, status=step["status"], output=step["observation"], elapsed_seconds=step["elapsed_seconds"])
+            self.event("tool_result", f"{tool} 第 {attempt} 次尝试：{step['status']}", status=step["status"], step=step)
+            if not next_retry:
+                return step
+            self.event("recovery", f"{tool} 暂时失败，等待后进行第 2 次尝试", status="running", retry=next_retry)
+            self.wait_for_recovery(max(0, next_retry["retry_at"] - time.time()))
+            if self.run["status"] == "cancelled":
+                return step
+            attempt, retry_of = next_retry["attempt"], next_retry["retry_of"]
+
+    def _loop(self, limit, mark_incomplete=True):
+        allowed = self.allowed_tools()
+        agent_id = (self.run.get("active_agent") or {}).get("id")
+        extension_key = f"{self.turn_id}:{agent_id or 'react'}"
+        while True:
+            self.guard_pause()
+            if self.cancelled.is_set():
+                self.run["status"] = "cancelled"
+                return
+            steps = self._turn_steps()
+            if len(steps) >= self.run["max_steps"]:
+                self.run["status"], self.run["stop_reason"] = "incomplete", "达到研究步骤上限，保留已有证据"
+                return
+            scoped = [step for step in steps if step.get("agent") == agent_id]
+            extensions = self.run.get("recovery_extensions", {}).get(extension_key, 0)
+            pending_retry = self.run.get("pending_tool_retry")
+            if len(scoped) >= int(limit) + extensions and not pending_retry:
+                last = scoped[-1] if scoped else {}
+                observation = last.get("observation")
+                recovery = observation.get("recovery", {}) if isinstance(observation, dict) else {}
+                if (last.get("status") == "failed" and recovery.get("repairable") and extensions < 1 and
+                        self.budget.used + 7644 <= self.budget.token_limit and self.budget.elapsed + 2 < self.budget.seconds_limit):
+                    self.run.setdefault("recovery_extensions", {})[extension_key] = extensions + 1
+                    self.event("recovery", "阶段最后一步失败，使用剩余总预算给予一次修正机会", status="running", agent=agent_id)
+                else:
+                    break
+            if self.budget.elapsed >= self.budget.seconds_limit:
+                raise BudgetError("研究时间预算耗尽")
+            try:
+                retry = self.run.get("pending_tool_retry")
+                decision = retry["decision"] if retry else self.run.pop("pending_decision", None) or self.decide()
                 self.run["pending_decision"] = decision
                 self.guard_pause()
             except (BudgetError, history.Paused):
                 raise
             except Exception as error:
-                failed = {"id": f"s{index + 1}", "at": storage.now(), "tool": "invalid",
-                          "reason": "模型调用或工具选择失败", "args": {},
-                          "source": "injected", "agent": (self.run.get("active_agent") or {}).get("id"),
-                          "role": (self.run.get("active_agent") or {}).get("role"), "turn": self.turn_id,
-                          "status": "failed", "elapsed_seconds": 0.0,
-                          "observation": {"error": str(error), "instruction": "按错误修正后重新选择工具。"}}
+                info = reliability.classify(error)
+                failed = {"id": f"s{len(self.run['steps']) + 1}", "at": storage.now(), "tool": "invalid",
+                          "reason": "模型调用或工具选择失败", "args": {}, "source": "controller",
+                          "agent": agent_id, "role": (self.run.get("active_agent") or {}).get("role"),
+                          "turn": self.turn_id, "status": "failed", "elapsed_seconds": 0,
+                          "observation": {"error": str(error), "recovery": info, "instruction": "按错误修正后重新选择工具。"}}
                 self.run["steps"].append(failed)
-                self.event("tool_result", f"决策失败：{error}", status="failed", level="warning", step=failed)
+                self.event("tool_result", f"决策失败：{error}", status="failed", step=failed)
+                if not info.get("repairable", True):
+                    self.run["status"], self.run["stop_reason"] = "incomplete", info["message"]
+                    return
                 continue
-            tool, args = decision.get("tool"), decision.get("args", {})
-            if self.budget.elapsed >= self.run["seconds_limit"]:
-                raise BudgetError("模型调用后已达到时间上限，不再启动工具")
-            agent = self.run.get("active_agent") or {}
-            step = {"id": f"s{index + 1}", "at": storage.now(), "tool": tool, "reason": str(decision.get("reason", "")),
-                    "args": args, "source": decision.get("source", "injected"),
-                    "agent": agent.get("id"), "role": agent.get("role"), "turn": self.turn_id}
+            tool = decision.get("tool")
             if allowed is not None and tool not in allowed:
                 self.run.pop("pending_decision", None)
-                step.update(status="failed", observation={
-                    "error": f"角色 {step['role']} 不可使用工具 {tool}；可用：{'、'.join(sorted(allowed))}",
-                    "instruction": "按角色可用工具重新选择，或结束本阶段。"})
-                step["elapsed_seconds"] = 0.0
-                self.run["steps"].append(step)
-                self.event("tool_result", f"{tool} 被角色边界拒绝", status="failed", level="warning", step=step)
+                failed = {"id": f"s{len(self.run['steps'])+1}", "tool": tool, "status": "failed", "turn": self.turn_id,
+                          "agent": agent_id, "role": (self.run.get("active_agent") or {}).get("role"), "args": decision.get("args", {}),
+                          "elapsed_seconds": 0, "observation": {"error": f"角色不可使用工具 {tool}"}}
+                self.run["steps"].append(failed)
+                self.event("tool_result", "工具被角色边界拒绝", status="failed", step=failed)
                 continue
-            self.run.pop("pending_decision", None)
-            self.run.pop("pending_response", None)
-            node = history.begin(self, "tool_call", tool=tool, input=args, reason=step["reason"],
-                                 source="local", role=step["role"], agent=step["agent"],
-                                 parent_id=next((n["id"] for n in reversed(self.run.get("trace", [])) if n["kind"] == "model_call"), None))
-            step["node_id"] = node["id"]
-            self.event("action", f"选择 {tool}：{step['reason']}", status="running", step=step)
-            tool_started = time.perf_counter()
-            try:
-                observation = self.apply(tool, args)
-                step.update(status="completed", observation=observation)
-            except Exception as error:
-                step.update(status="failed", observation={"error": str(error), "instruction": "根据错误修正方法；不要捏造成功结果。"})
-            step["elapsed_seconds"] = round(time.perf_counter() - tool_started, 3)
-            self.run["steps"].append(step)
-            history.settle(self, node, status=step["status"], output=step["observation"], elapsed_seconds=step["elapsed_seconds"])
-            self.event("tool_result", f"{tool} {'执行完成' if step['status'] == 'completed' else '执行失败'}",
-                           status=step["status"], level="info" if step["status"] == "completed" else "warning", step=step)
-            if self.run["status"] in ("completed", "incomplete", "inconclusive"):
+            self._perform_tool(decision, retry=retry)
+            if self.run["status"] in ("completed", "incomplete", "inconclusive", "cancelled"):
                 return
             self.guard_pause()
         if mark_incomplete and self.run["status"] == "running":
@@ -608,6 +784,19 @@ class ResearchEngine:
             agent = activate(f"g{index + 1}", stage["role"], stage["goal"], stage.get("why", ""))
             if agent["status"] in ("done", "completed"):
                 continue
+            skip_reason = ""
+            if stage["role"] == "experimenter" and not self.run.get("hypotheses") and not self.run.get("plan"):
+                skip_reason = "尚无计划或假设，实验阶段无事可做"
+            elif stage["role"] == "verifier" and not any(
+                    experiment.get("status") == "completed" and not experiment.get("verification")
+                    for experiment in self.run.get("experiments", [])):
+                skip_reason = "没有待复核的实验"
+            if skip_reason:
+                agent["status"] = "skipped"
+                self.event("stage", f"阶段 {agent['id']}（{stage['role']}）跳过：{skip_reason}",
+                           status="skipped", level="warning")
+                self.save()
+                continue
             self.event("stage", f"阶段 {agent['id']}（{stage['role']}）：{stage['goal']}", status="running")
             self._loop(int(stage.get("max_steps", 3)), mark_incomplete=False)
             self.guard_pause()
@@ -616,11 +805,16 @@ class ResearchEngine:
             self.event("stage", f"阶段 {agent['id']} 结束：{agent['status']}", status=agent["status"])
         self.run["active_agent"] = None
         if self.run["status"] == "running":
-            self.run["status"], self.run["stop_reason"] = "incomplete", "工作流已执行但未形成已复核报告"
+            self.run["status"], self.run["stop_reason"] = "incomplete", "研究阶段已结束，仍未形成通过校验的报告"
 
     def apply(self, tool, args):
         if not isinstance(args, dict):
             raise ValueError("工具参数必须是对象")
+        cfg = storage.settings()
+        resource = reliability.resource(tool, args, cfg)
+        if reliability.blocked(self.run, resource, cfg):
+            raise reliability.Failure("该服务当前配置已被停用，未再次发起请求。请换来源或修复配置。",
+                                      resource=resource, kind="circuit_open", blocked=True)
         return registry.dispatch(self, tool, args)
 
     def _apply_builtin(self, tool, args):
@@ -676,6 +870,10 @@ class ResearchEngine:
                 raise ValueError("先检查材料或收集证据")
             if not all(isinstance(args.get(k), str) and args[k].strip() for k in ("statement", "prediction", "controls", "metric")):
                 raise ValueError("假设需要statement、prediction、controls、metric")
+            metric_name = str(args["metric"]).strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,40}", metric_name):
+                raise ValueError("metric 必须是字母开头的短英文标识符（≤40字符，可含数字与下划线），不能使用中文句子或标点")
+            args["metric"] = metric_name
             threshold = args.get("threshold")
             if args.get("relation") not in ("gt", "ge", "lt", "le") or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
                 raise ValueError("需要合法的比较关系和有限数值阈值")
@@ -707,20 +905,28 @@ class ResearchEngine:
                                      "protocol": "同一冻结代码，新隐藏种子，预注册数值判据；不等于统计显著性或跨领域有效性"}
             return {"id": item["id"], **item["verification"]}
         if tool == "finish":
+            role = (run.get("active_agent") or {}).get("role")
+            if role and role != "reporter" and not self.in_wrap_up():
+                raise ValueError("只有报告角色可以结束研究；当前阶段请继续其职责，或让流程进入报告阶段")
             valid = {a["id"] for a in run["assets"]} | {p["id"] for p in run["sources"]} | {h["id"] for h in run["hypotheses"]} | {e["id"] for e in run["experiments"]}
             conclusion_text = str(args.get("conclusion") or "").strip()
             if len(conclusion_text) < 10:
                 raise ValueError("finish需要至少10字符的研究结论；未完成时也要写明证据缺口，不能提交空报告")
             citations = args.get("citations", [])
             if not isinstance(citations, list) or any(c not in valid for c in citations):
-                raise ValueError("报告只能引用本轮已存在的证据ID")
+                run["draft_report"] = {"args": copy.deepcopy(args), "verified": False,
+                                       "errors": ["引用不在本轮证据集合"]}
+                raise reliability.Failure(f"报告只能引用本轮已存在的证据ID：{sorted(valid)}；记忆不是证据，无可用证据时使用 citations=[]。",
+                                          kind="invalid_citations")
             verified = [e for e in run["experiments"] if e.get("verification") and e["id"] in citations]
-            kind = run.get("research_kind") or "quantitative"
+            kind = run.get("research_kind") or self.infer_kind()
+            run["research_kind"] = kind
             substantive = bool(run.get("documents")) or any(
                 "正文" in scope or "网页搜索摘要" in scope
                 for scope in (source.get("evidence_scope") or "" for source in run["sources"]))
             report = {"conclusion": str(args.get("conclusion", "")), "citations": citations,
                       "lesson": str(args.get("lesson", ""))}
+
             if kind in ("qualitative", "literature", "mixed"):
                 if substantive:
                     report["evidence_scope_note"] = "定性/文献类结论只依据本轮检索到的摘要或正文；未获取平台数据时不做外推。"
@@ -736,6 +942,24 @@ class ResearchEngine:
                     "evidence_gaps": report.get("evidence_gaps", []),
                     "note": "有复核记录不代表假设成立，须查看固定判据结果。"}
         raise ValueError(f"未开放工具 {tool}；请从可用工具选择")
+
+    def failure_report(self):
+        errors = []
+        for step in self._turn_steps():
+            if step.get("status") == "failed":
+                info = step.get("observation", {}).get("recovery", {})
+                text = info.get("message") or step.get("observation", {}).get("error")
+                if text and text not in errors:
+                    errors.append(text)
+        gaps = errors[-4:]
+        if not self.run.get("sources") and not self.run.get("experiments"):
+            gaps.append("未取得外部证据或可验证实验结果；记忆和常识推断不作为研究证据。")
+        elif not gaps:
+            gaps.append(f"已收集 {len(self.run.get('sources', []))} 条来源、"
+                        f"{len(self.run.get('experiments', []))} 项实验，但没有形成可引用结论。")
+        reason = "；".join(gaps) or self.run.get("error") or self.run.get("stop_reason") or "本轮未形成可引用结论"
+        return {"conclusion": "未完成：" + reason, "citations": [], "lesson": "", "evidence_gaps": gaps,
+                "recovery": {"reason": reason, "next_steps": ["修复不可用服务的配置，或从调用节点分支改用其他来源", "依据真实证据重新核验问题前提与结论"]}}
 
     def write_report(self):
         report = self.run.get("report", {})
@@ -775,6 +999,12 @@ class ResearchEngine:
         if gaps:
             lines.append("\n## 证据缺口")
             lines.extend(f"- {gap}" for gap in gaps)
+        if report.get("recovery"):
+            lines.append("\n## 可继续的操作")
+            lines.extend(f"- {step}" for step in report["recovery"].get("next_steps", []))
+        if run.get("draft_report"):
+            lines.extend(["\n## 未通过校验的草稿（不作为研究结论）",
+                          json.dumps(run["draft_report"], ensure_ascii=False)])
         kind = run.get("research_kind") or "quantitative"
         limitations = {
             "qualitative": "定性研究：结论受检索覆盖与正文可获取性限制；元数据不等于结论；没有平台或受众数据时不做外推。",
@@ -907,7 +1137,7 @@ def resume(run, folder, question, *, token_limit=None, seconds_limit=None, max_s
     run["memory_context"], run["experience"] = context, context.get("method")
     run["memory_version"] = (context.get("method") or {}).get("version", 0)
     run["status"], run["finished_at"], run["stop_reason"], run["error"] = "queued", None, None, None
-    for key in ("pending_response", "pending_decision", "decision_feedback", "restore_budget", "report"):
+    for key in ("pending_response", "pending_decision", "pending_tool_retry", "decision_feedback", "recovery_feedback", "draft_report", "restore_budget", "report"):
         run.pop(key, None)
     run["budget_call_start"] = len(run.get("calls", []))
     run["plan"], run["research_kind"], run["workflow"] = None, None, None

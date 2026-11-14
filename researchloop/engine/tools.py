@@ -129,7 +129,7 @@ def experiment(code, run, folder, experiment_id, phase, timeout, seed):
 def check(hypothesis, result):
     value = result["metrics"].get(hypothesis["metric"])
     if value is None:
-        raise ValueError(f"实验没有返回预注册指标 {hypothesis['metric']}")
+        raise ValueError(f"实验没有返回预注册指标 {hypothesis['metric']}；实际 metrics：{sorted(result['metrics'])}")
     target = hypothesis["threshold"]
     passed = {"gt": value > target, "ge": value >= target, "lt": value < target, "le": value <= target}[hypothesis["relation"]]
     return {"passed": passed, "metric": hypothesis["metric"], "value": value,

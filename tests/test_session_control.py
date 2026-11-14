@@ -183,7 +183,7 @@ class SessionControlTests(unittest.TestCase):
         self.assertEqual(paused['status'], 'paused')
         resumed = core.resume_paused(storage.read_json(engine.folder / 'run.json'), engine.folder)
         def finish():
-            return {'tool': 'finish', 'args': {'conclusion': '材料不足', 'citations': [], 'lesson': ''}}
+            return {'tool': 'finish', 'args': {'conclusion': '当前材料不足，无法形成可核验的结论。', 'citations': [], 'lesson': ''}}
         resumed.decide = finish
         result = resumed.execute()
         self.assertEqual([s['tool'] for s in result['steps']], ['inspect', 'finish'])

@@ -126,6 +126,9 @@ class RoleTests(unittest.TestCase):
             self.assertTrue(roles.tools_for(role), role)
         self.assertIn("experiment", roles.tools_for("experimenter"))
         self.assertNotIn("experiment", roles.tools_for("verifier"))
+        self.assertNotIn("finish", roles.tools_for("planner"))
+        self.assertNotIn("finish", roles.tools_for("experimenter"))
+        self.assertIn("finish", roles.tools_for("reporter"))
 
 
 if __name__ == "__main__":

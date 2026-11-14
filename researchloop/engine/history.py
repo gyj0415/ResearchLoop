@@ -134,6 +134,7 @@ def fork(run, folder, node_id, question=""):
             # A new direction must be seen before executing any pending old choice.
             state.pop("pending_response", None)
             state.pop("pending_decision", None)
+            state.pop("pending_tool_retry", None)
         state["budget"] = {}  # The branch's new spending is separate from inherited cost.
         state["budget_call_start"] = len(state.get("calls", []))
         state["branch_step_start"] = len(state.get("steps", []))
@@ -156,4 +157,4 @@ def fork(run, folder, node_id, question=""):
 
 def saved_terminal(state):
     last = (state.get("trace") or [{}])[-1]
-    return last.get("kind") == "tool_call" and last.get("tool") == "finish"
+    return last.get("kind") == "tool_call" and last.get("tool") == "finish" and last.get("status") == "completed"
