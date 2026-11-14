@@ -14,6 +14,7 @@ from researchloop.scenarios.operator.pipeline import TaskRun
 from researchloop.scenarios.operator.service import execute
 from researchloop.scenarios.operator.verdict import Verdict
 from researchloop.server import SERVICE, Handler, summary
+from researchloop import storage
 
 
 def _verdict(reason, decision="keep_baseline"):
@@ -32,6 +33,13 @@ def _task_run(reason, *, experiments=(), wallclock_s=0.2, decision="keep_baselin
 
 
 class OperatorRunTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(dir=storage.ROOT / ".cache")
+        self.addCleanup(self.temporary.cleanup)
+        patcher = patch.object(storage, "RUNS", Path(self.temporary.name) / "runs")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_blocked_run_is_recorded_and_publishable(self):
         with tempfile.TemporaryDirectory() as directory:
             run = execute("lose_gelu_pool", runs_root=Path(directory), seconds_limit=30,

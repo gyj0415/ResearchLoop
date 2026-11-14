@@ -16,7 +16,8 @@ const paths = {
   download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/>',
   compare:'<path d="M5 4v16M19 4v16M5 7h10m-3-3 3 3-3 3M19 17H9m3-3-3 3 3 3"/>',
-  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>'
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
+  menu:'<path d="M4 7h16M4 12h16M4 17h16"/>'
 };
 function icon(name) { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.info}</svg>`; }
 $$('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
@@ -33,7 +34,7 @@ const number = n => new Intl.NumberFormat('en-US').format(n || 0);
 const time = n => n >= 60 ? `${Math.floor(n/60)}m ${Math.round(n%60)}s` : `${Math.round(n || 0)}s`;
 const delta = n => `${n >= 0 ? '+' : ''}${(n*100).toFixed(1)} pp`;
 const operatorTask = name => name === 'win_bias_mean' || name === 'lose_gelu_pool';
-const modeLabel = r => r.mode === 'operator' ? '算子研究' : r.mode === 'search' ? '随机搜索对照' : r.mode === 'carry' ? '配置沿用对照' : r.memory_version ? `Agent · 经验 v${r.memory_version}` : r.memory_selection?.requested_version ? `Agent · 拒绝经验 v${r.memory_selection.requested_version}` : 'Agent · 无历史经验';
+const modeLabel = r => r.domain === 'research' ? '科研 Agent' : r.mode === 'operator' ? '旧版算子研究' : r.mode === 'search' ? '随机搜索对照' : r.mode === 'carry' ? '配置沿用对照' : r.memory_version ? `Agent · 经验 v${r.memory_version}` : r.memory_selection?.requested_version ? `Agent · 拒绝经验 v${r.memory_selection.requested_version}` : 'Agent · 无历史经验';
 
 async function api(path, body) {
   const response = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -51,7 +52,7 @@ function goto(name) {
   page = ['workspace','records','memory','data','logs'].includes(name) ? name : 'workspace';
   $$('.page').forEach(el => el.classList.toggle('hidden',el.id !== `page-${page}`));
   $$('.nav-item').forEach(el => el.classList.toggle('active',el.dataset.page === page));
-  $('#page-label').textContent = {workspace:'研究工作台',records:'实验记录',memory:'研究经验',data:'数据与评估',logs:'日志'}[page];
+  $('#page-label').textContent = {workspace:'研究工作台',records:'运行记录',memory:'研究经验',data:'材料与工具',logs:'日志'}[page];
   history.replaceState(null,'',`#${page}`);
   if (page === 'data') renderFinal();
   if (page === 'logs') renderLogs();
@@ -67,7 +68,7 @@ async function refresh(force=false) {
   refreshing = true;
   try {
     state = await api('/api/state');
-    if (!state.runs.some(r => r.id === selectedId)) selectedId = state.active_run || state.runs.find(r=>r.mode==='agent'&&r.status==='completed')?.id || state.runs[0]?.id || '';
+    if (!state.runs.some(r => r.id === selectedId)) selectedId = state.active_run || state.runs.find(r=>r.domain==='research')?.id || '';
     const oldOptions = $('#run-select').innerHTML;
     const options = state.runs.length ? state.runs.map(r => `<option value="${esc(r.id)}">${esc(r.task)} · ${esc(modeLabel(r))} · ${esc(r.id.slice(9,15))}</option>`).join('') : '<option value="">暂无运行</option>';
     if (oldOptions !== options) $('#run-select').innerHTML = options;
@@ -284,14 +285,20 @@ function updateMode(){const task=$('#run-form [name=task]').value;if(operatorTas
 $('#mode-input').addEventListener('change',updateMode);
 $('#run-form [name=task]').addEventListener('change',updateMode);
 $('#run-form').addEventListener('submit',async e=>{e.preventDefault();const form=new FormData(e.target);const body=Object.fromEntries(form);body.use_memory=$('#memory-input').checked;for(const k of ['max_experiments','token_limit','seconds_limit','seed'])body[k]=Number(body[k]);body.memory_version=state.memory.active;const button=$('#run-form [type=submit]');button.disabled=true;try{const created=await api('/api/runs',body);$('#run-dialog').close();await selectRun(created.id);toast('研究已启动，结果和全部调用消耗将自动保存。');}catch(error){toast(error.message);}finally{button.disabled=false;}});
-async function checkModels(){const badge=$('#ollama-status');badge.innerHTML='<span class="loader"></span>检查 Ollama…';try{modelStatus=await api('/api/ollama');badge.classList.toggle('offline',!modelStatus.available);badge.innerHTML=`<span class="small-dot"></span>${modelStatus.available?'Ollama 已连接':'Ollama 未连接'}`;$('#model-options').innerHTML=modelStatus.models.filter(m=>!m.name.toLowerCase().includes('cloud')).map(m=>`<option value="${esc(m.name)}">${esc(m.details?.parameter_size||'')}</option>`).join('');$('#model-details').textContent=modelStatus.available?`检测到 ${modelStatus.models.length} 个模型。当前默认 ${state?.settings.model||'未设置'}。所有推理保持本地，云端接口关闭。`:`本地服务未连接：${modelStatus.error}。请运行 ollama serve，再检测服务。`;}catch(e){badge.textContent='连接检测失败';toast(e.message);}}
-function openSettings(){if(state){$('#settings-form [name=ollama_url]').value=state.settings.ollama_url;$('#model-name').value=state.settings.model;}$('#settings-dialog').showModal();checkModels();}
+async function checkModels(){const badge=$('#ollama-status');badge.innerHTML='<span class="loader"></span>检查 Ollama…';try{modelStatus=await api('/api/ollama');badge.classList.toggle('offline',!modelStatus.available);badge.innerHTML=`<span class="small-dot"></span>${modelStatus.available?'Ollama 已连接':'Ollama 未连接'}`;$('#model-options').innerHTML=modelStatus.models.filter(m=>!m.name.toLowerCase().includes('cloud')).map(m=>`<option value="${esc(m.name)}">${esc(m.details?.parameter_size||'')}</option>`).join('');const cloud=state?.settings?.cloud||{};$('#model-details').textContent=modelStatus.available?`检测到 ${modelStatus.models.length} 个本地模型。当前本地默认 ${state?.settings.model||'未设置'}。${cloud.enabled?`云端已启用：${cloud.model}`:'云端未启用。'}`:`本地服务未连接：${modelStatus.error}。请运行 ollama serve，再检测服务。`;}catch(e){badge.textContent='连接检测失败';toast(e.message);}}
+function fillCloudSettings(){const c=state?.settings?.cloud||{},w=state?.settings?.web||{},form=$('#settings-form');$('#model-source').value=state?.settings?.model_source||'local';$('#cloud-enabled').checked=!!c.enabled;form.querySelector('[name=cloud_base_url]').value=c.base_url||'';form.querySelector('[name=cloud_model]').value=c.model||'';form.querySelector('[name=cloud_api_key]').value='';$('#cloud-details').textContent=c.api_key_set?'已保存 API Key（页面不回显明文）。':'尚未保存 API Key；启用云端模型前需填写。';$('#web-enabled').checked=!!w.enabled;form.querySelector('[name=web_provider]').value=w.search_provider||'searxng';form.querySelector('[name=web_endpoint]').value=w.search_endpoint||'';form.querySelector('[name=web_api_key]').value='';form.querySelector('[name=web_max_results]').value=w.max_results||5;$('#web-details').textContent=w.search_api_key_set?'已保存搜索 API Key。':'未保存搜索 API Key（SearXNG 可不需要）。';}
+let roleCatalog=[];
+async function renderRoleModels(){const saved=state?.settings?.roles||{};if(!roleCatalog.length){try{const data=await api('/api/roles');roleCatalog=data.roles||[];}catch(e){roleCatalog=[];}}const cloud=state?.settings?.cloud||{};$('#role-models').innerHTML=roleCatalog.map(r=>{const c=saved[r.role]||{};return `<div class="role-row" data-role="${esc(r.role)}"><span>${esc(r.label)}</span><select><option value="">沿用本轮模型</option><option value="local">本地</option><option value="cloud">云端</option></select><input placeholder="${esc(cloud.enabled?(cloud.model||'云端模型'):'模型名')}" value="${esc(c.model||'')}"></div>`;}).join('');document.querySelectorAll('#role-models .role-row').forEach(row=>{const conf=saved[row.dataset.role]||{};row.querySelector('select').value=conf.model_source||'';});}
+function openSettings(){if(state){$('#settings-form [name=ollama_url]').value=state.settings.ollama_url;$('#model-name').value=state.settings.model;fillCloudSettings();}$('#settings-dialog').showModal();checkModels();renderRoleModels();}
 $('#settings-button').addEventListener('click',openSettings);$('#settings-shortcut').addEventListener('click',openSettings);$('#refresh-models').addEventListener('click',checkModels);
-$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/settings',Object.fromEntries(new FormData(e.target)));$('#settings-dialog').close();toast('本地模型设置已保存。');await refresh(true);await checkModels();}catch(error){toast(error.message);}});
+$('#check-cloud').addEventListener('click',async()=>{const form=$('#settings-form'),note=$('#cloud-details');note.textContent='检测已保存的云端配置…';try{const result=await api('/api/cloud/test',{cloud:{base_url:form.querySelector('[name=cloud_base_url]').value,api_key:form.querySelector('[name=cloud_api_key]').value}});note.textContent=result.available?`云端已连接，可用模型 ${result.models.length} 个${result.models[0]?`（如 ${result.models[0].name}）`:''}。`:`云端未连接：${result.error}`;}catch(error){note.textContent='检测失败：'+error.message;}});
+$('#check-web').addEventListener('click',async()=>{const form=$('#settings-form'),note=$('#web-details');note.textContent='检测已保存的联网搜索配置…';try{const result=await api('/api/web/test',{query:'research agent evaluation'});note.textContent=`${result.provider} 可用，返回 ${result.results.length} 条结果${result.results[0]?`（如 ${result.results[0].title||result.results[0].url}）`:''}。`;}catch(error){note.textContent='联网检测失败：'+error.message;}});
+$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const raw=Object.fromEntries(new FormData(e.target));const roles={};document.querySelectorAll('#role-models .role-row').forEach(row=>{const source=row.querySelector('select').value;if(source)roles[row.dataset.role]={model_source:source,model:row.querySelector('input').value.trim()};});try{const body={ollama_url:raw.ollama_url,model:raw.model,model_source:raw.model_source,roles,cloud:{enabled:$('#cloud-enabled').checked,base_url:raw.cloud_base_url,model:raw.cloud_model,api_key:raw.cloud_api_key},web:{enabled:$('#web-enabled').checked,search_provider:raw.web_provider,search_endpoint:raw.web_endpoint,search_api_key:raw.web_api_key,max_results:Number(raw.web_max_results||5),fetch_max_chars:6000}};await api('/api/settings',body);$('#settings-dialog').close();toast('设置已保存。');await refresh(true);await checkModels();}catch(error){toast(error.message);}});
 $('#prepare-button').addEventListener('click',async()=>{try{await api('/api/prepare',{});toast('开始准备数据，所有文件写入当前项目的 data 目录。');await refresh(true);}catch(e){toast(e.message);}});
 $('#finalize-button').addEventListener('click',()=>$('#confirm-dialog').showModal());
 $('#confirm-finalize').addEventListener('click',async()=>{const button=$('#confirm-finalize');button.disabled=true;button.textContent='正在统一验收…';try{await api('/api/finalize',{});$('#confirm-dialog').close();toast('方案已冻结，最终测试结果已保存。');await refresh(true);await renderFinal();}catch(e){toast(e.message);}finally{button.disabled=false;button.textContent='确认冻结并验收';}});
 let briefThread=[], currentPlan=null, attachedTask=null;
+let logEntries=[], logLoading=false, logStamp='', logSearchTimer;
 function renderBrief(){
   $('#brief-thread').innerHTML=briefThread.map(item=>`<p class="brief-line ${item.role==='user'?'user':'assistant'}">${esc(item.content)}</p>`).join('');
   const card=$('#plan-card');
@@ -303,20 +310,68 @@ function renderBrief(){
   $('#start-plan').addEventListener('click',startPlan);
   $('#open-plan-log').addEventListener('click',openPlanLog);
 }
-async function renderLogs(){
+function logQuery(){
+  const query=new URLSearchParams({limit:'200'});
+  for(const [key,id] of [['source','log-source'],['level','log-level'],['run_id','log-run'],['text','log-search']]){
+    const value=$(`#${id}`).value.trim();if(value)query.set(key,value);
+  }
+  return query.toString();
+}
+function logTime(at){
+  const date=new Date(at);return Number.isNaN(date.getTime())?'时间未记录':date.toLocaleString('zh-CN',{hour12:false});
+}
+function logCard(entry,open){
+  const sources={planner:'拟定计划',retrieval:'检索研究',operator:'算子研究',api:'系统接口'};
+  const actors={ollama:'本地模型',rules:'规则草拟',tool:'工具执行',system:'系统'};
+  const stages={brief_started:'接收方向',brief:'拟定计划',task:'接入任务',setup:'准备',intake:'解析结构',evidence:'收集证据',hypothesis:'提出假设',planning:'研究规划',model_call:'模型调用',baseline:'建立基线',diagnosis:'失败诊断',screening:'开发筛选',measurement:'实验测量',validation:'开始验证',verification:'验证结果',verdict:'裁决',memory_match:'经验匹配',experience:'生成经验',completed:'运行结束',timing:'性能计时',stop:'停止实验',request_failed:'请求失败',error:'执行失败',invalid_decision:'策略无效',budget_stop:'预算停止',shared_stop:'停止条件',cancelled:'取消'};
+  const statuses={running:'阶段开始',queued:'等待中',completed:'已完成',failed:'失败',fallback:'已降级为规则',skipped:'已跳过',rejected:'已否决',unsupported:'暂不支持',budget_stopped:'预算耗尽',cancelled:'已取消',legacy:'历史记录'};
+  const level={info:'信息',warning:'警告',error:'错误'}[entry.level]||'信息';
+  const usage=entry.usage;
+  const data=entry.data||{}, measured=data.result, verdict=data.verdict;
+  const reasons={target_met:'达到加速目标',blocked_by_transcendental:'超越函数开销触发停止',blocked_by_bandwidth:'带宽证据触发停止',blocked_by_reduction:'归约开销触发停止',blocked_by_overhead:'调用开销触发停止',incorrect_candidate:'候选未通过正确性验证',no_candidate:'当前规则未生成可验证候选',near_miss:'实测收益未达到目标'};
+  let title=entry.text;
+  if(verdict?.reason_code&&['verdict','completed'].includes(entry.kind))title=`${entry.kind==='completed'?'算子研究结束':'本轮裁决'}：${reasons[verdict.reason_code]||verdict.reason_code}`;
+  const values=[];
+  if(measured?.speedup_same_window!=null)values.push(`实测加速比 ${Number(measured.speedup_same_window).toFixed(3)}×`);
+  if(measured?.anchor_ms_used!=null)values.push(`参考 ${Number(measured.anchor_ms_used).toFixed(5)} ms`);
+  if(measured?.median_ms!=null)values.push(`候选 ${Number(measured.median_ms).toFixed(5)} ms`);
+  if(data.reference_ms!=null)values.push(`参考实测 ${Number(data.reference_ms).toFixed(5)} ms`);
+  if(data.metrics?.complete_at_5!=null)values.push(`完整命中@5 ${percent(data.metrics.complete_at_5)}`);
+  if(data.experiment_count!=null)values.push(`实际实验 ${data.experiment_count} 次`);
+  if(verdict?.detail)values.push(verdict.detail);
+  const gates=Object.values(data.gates||{});
+  if(gates.length)values.push(`正确性门控 ${gates.filter(g=>g.passed).length}/${gates.length} 通过`);
+  const meta=[sources[entry.source]||'历史来源',actors[entry.actor]||'',entry.model||'',entry.task?`任务 ${entry.task}`:'',entry.elapsed_ms!=null?`${(entry.elapsed_ms/1000).toFixed(3)} 秒`:''];
+  if(usage)meta.push(usage.known?`${number(usage.total_tokens)} token`:(entry.data?.log?.model_called?'token 未返回':'未调用模型'));
+  if(entry.request_id)meta.push(`请求 ${entry.request_id.slice(0,8)}`);
+  if(entry.run_id)meta.push(`运行 ${entry.run_id}`);
+  return `<details class="activity-entry ${esc(entry.level||'info')}" data-log-id="${esc(entry.id)}" ${open?'open':''}><summary><div class="activity-head"><time datetime="${esc(entry.at)}">${esc(logTime(entry.at))}</time><span class="log-level ${esc(entry.level||'info')}">${level}</span><span class="pill subtle">${esc(stages[entry.kind]||entry.kind)}</span><span class="log-status">${esc(statuses[entry.status]||entry.status||'状态未记录')}</span></div><strong class="activity-title">${esc(title)}</strong><span class="activity-meta">${meta.filter(Boolean).map(esc).join(' · ')}</span>${values.length?`<span class="activity-values">${values.map(esc).join(' · ')}</span>`:''}<span class="activity-expand">展开原始事件与证据 ↓</span></summary><div class="activity-details">${entry.legacy_note?`<p>${esc(entry.legacy_note)}</p>`:''}<div class="activity-actions"><button class="small-link" data-log-copy="${esc(entry.id)}">复制原始 JSON</button>${entry.run_id?`<button class="small-link" data-log-run="${esc(entry.run_id)}">打开对应运行 ↗</button>`:''}</div><pre>${esc(JSON.stringify(entry,null,2))}</pre></div></details>`;
+}
+async function renderLogs(force=false){
+  if(logLoading)return;
+  logLoading=true;
   try{
-    const data = await api('/api/logs');
+    const runSelect=$('#log-run'), selected=runSelect.value;
+    const options='<option value="">全部运行与请求</option>'+(state?.runs||[]).map(r=>`<option value="${esc(r.id)}">${esc(r.task)} · ${esc(r.id)}</option>`).join('');
+    if(runSelect.innerHTML!==options){runSelect.innerHTML=options;runSelect.value=selected;}
+    const query=logQuery();
+    const data = await api(`/api/logs?${query}`);
+    if(query!==logQuery())return;
     const entries = data.entries || [];
+    logEntries=entries;
     $('#log-count').textContent = String(entries.length);
-    if (!entries.length){$('#log-view').innerHTML=empty('还没有任务日志','拟定计划或开始研究之后，过程会显示在这里。');return;}
-    $('#log-view').innerHTML=entries.map(entry=>`<div class="log-line"><time>${esc((entry.at||'').replace('T',' ').slice(0,19))}</time><span class="log-kind">${esc(entry.kind)}</span><span>${esc(entry.text)}${entry.task?` · ${esc(entry.task)}`:''}${entry.elapsed_ms?` · ${esc(entry.elapsed_ms)}ms`:''}</span></div>`).join('');
-  }catch(error){if($('#log-view'))$('#log-view').innerHTML=empty('日志暂时读不到',error.message);}
+    $('#export-logs').disabled=!entries.length;
+    $('#log-summary').textContent=`显示最近 ${entries.length} / ${data.matched??entries.length} 条匹配事件 · 每 2.2 秒自动更新 · 最后读取 ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}${data.ignored_legacy?`。已隔离 ${data.ignored_legacy} 条无法关联真实运行的旧记录，原文件保留。`:''}`;
+    const stamp=JSON.stringify([query,entries.map(e=>e.id)]);
+    if(!force&&stamp===logStamp)return;
+    logStamp=stamp;
+    const open=new Set($$('#log-view details[open]').map(el=>el.dataset.logId));
+    $('#log-view').innerHTML=entries.length?entries.map(entry=>logCard(entry,open.has(entry.id))).join(''):empty('没有匹配的执行记录','拟定计划、加入任务或运行实验后，实际事件会出现在这里。可以清空筛选条件查看全部记录。');
+  }catch(error){$('#log-summary').textContent=`日志读取失败：${error.message}。已加载的内容保留，可点击刷新重试。`;}
+  finally{logLoading=false;}
 }
 async function openPlanLog(){
-  try{
-    const data=await api('/api/logs');
-    showDetail('拟定日志', {latest: currentPlan?.log || null, entries: data.entries || []});
-  }catch(error){toast(error.message);}
+  showDetail('本次计划的实际调用记录',currentPlan?.log||{message:'这份计划没有调用记录'});
 }
 async function draftBrief(){
   const text=$('#brief-input').value.trim();
@@ -356,11 +411,39 @@ async function addTask(){
   }catch(error){toast(error.message);}
   finally{button.disabled=false;}
 }
-$('#draft-brief').addEventListener('click',draftBrief);
+$('#draft-brief').addEventListener('click',()=>startGeneralResearch());
 $('#add-task').addEventListener('click',addTask);
 $$('[data-prompt]').forEach(el=>el.addEventListener('click',()=>{$('#brief-input').value=el.dataset.prompt;$('#brief-input').focus();}));
-$('#brief-input').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))draftBrief();});
+$('#brief-input').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))startGeneralResearch();});
+for(const id of ['log-source','log-level','log-run'])$(`#${id}`).addEventListener('change',()=>renderLogs(true));
+$('#log-search').addEventListener('input',()=>{clearTimeout(logSearchTimer);logSearchTimer=setTimeout(()=>renderLogs(true),180);});
+$('#refresh-logs').addEventListener('click',()=>renderLogs(true));
+$('#log-view').addEventListener('click',async event=>{
+  const button=event.target.closest('button');if(!button)return;
+  if(button.dataset.logRun){goto('workspace');await selectRun(button.dataset.logRun);return;}
+  if(button.dataset.logCopy){try{await navigator.clipboard.writeText(JSON.stringify(logEntries.find(e=>e.id===button.dataset.logCopy),null,2));toast('原始事件已复制。');}catch(error){toast(`复制失败，可直接选择原始 JSON：${error.message}`);}}
+});
+$('#export-logs').addEventListener('click',()=>{
+  const url=URL.createObjectURL(new Blob([logEntries.map(e=>JSON.stringify(e)).join('\n')+'\n'],{type:'application/x-ndjson;charset=utf-8'}));
+  const link=document.createElement('a');link.href=url;link.download=`researchloop-logs-${Date.now()}.jsonl`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
 goto(location.hash.slice(1)||'workspace');
 refresh(true).then(checkModels);
 setInterval(()=>refresh(),2200);
 setInterval(renderBudget,1000);
+
+/* Sidebar: collapsible, remembered locally; on small screens it closes after
+   navigation so the page is immediately visible. */
+const SIDEBAR_KEY='researchloop-sidebar-collapsed';
+let sidebarCollapsed=false;
+try{sidebarCollapsed=localStorage.getItem(SIDEBAR_KEY)==='1';}catch(_){}
+function applySidebar(collapsed){
+  document.body.classList.toggle('sidebar-collapsed',collapsed);
+  const button=$('#sidebar-toggle');
+  if(button){button.setAttribute('aria-expanded',String(!collapsed));button.setAttribute('aria-label',collapsed?'展开侧栏':'收起侧栏');}
+}
+function setSidebar(collapsed){sidebarCollapsed=collapsed;try{localStorage.setItem(SIDEBAR_KEY,collapsed?'1':'0');}catch(_){}applySidebar(collapsed);}
+applySidebar(sidebarCollapsed);
+$('#sidebar-toggle')?.addEventListener('click',()=>setSidebar(!sidebarCollapsed));
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!sidebarCollapsed&&window.matchMedia('(max-width:700px)').matches)setSidebar(true);});
+$$('.nav-item').forEach(el=>el.addEventListener('click',()=>{if(window.matchMedia('(max-width:700px)').matches&&!sidebarCollapsed)setSidebar(true);}));

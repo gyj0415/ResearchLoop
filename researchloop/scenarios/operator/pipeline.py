@@ -205,25 +205,32 @@ def run_task(spec: Any, cfg: RunConfig, *,
              evaluator: Optional[Evaluator] = None,
              memory_path: Optional[Any] = None,
              states: Optional[Dict[str, bandit.FamilyState]] = None,
-             exp_prefix: str = "") -> TaskRun:
+             exp_prefix: str = "", on_event=None) -> TaskRun:
     """跑一个任务块。`states` 是跨任务共享的族级统计（C5 用）。"""
     started = time.perf_counter()
     ev_obj = evaluator or Evaluator(passes=cfg.passes)
     notes: List[str] = []
     exp_seq = {"n": 0}
+    def emit(kind, text, **data):
+        if on_event is not None:
+            on_event(kind, text, **data)
 
     # ② lift
     ir_node: Optional[Node] = None
     try:
         ir_node = lifter.lift(spec)
+        emit("intake", "已解析参考实现的计算结构", ir=ir_node.to_source())
     except UnsupportedPattern as exc:      # noqa: PERF203
         notes.append(f"lift 失败，降级为「无结构候选」：{exc}")
+        emit("intake", f"当前解析器不支持此结构：{exc}", status="unsupported", level="warning")
 
     # ③ evidence
     ev = None
     if cfg.use_evidence and ir_node is not None:
+        emit("evidence", "正在测量算子微基准", status="running")
         ev = evidence.profile_task(spec, ir_node)
         hint, factor = ev.verdict_hint, float(ev.budget_factor)
+        emit("evidence", f"微基准完成，判断为 {hint}", evidence=ev.to_json(), budget_factor=factor)
     elif ir_node is not None:
         hint, factor = "winnable", 1.0
         if not cfg.use_evidence:
@@ -243,6 +250,8 @@ def run_task(spec: Any, cfg: RunConfig, *,
         exact = next((c for c in cases if c.signature == sig), None)
         if hints["notes"]:
             notes.extend(hints["notes"][:2])
+        emit("memory_match", f"检索到 {len(cases)} 条相关经验，{'有' if exact else '无'}精确结构匹配",
+             exact_match=exact is not None, matched_cases=len(cases), hints=hints)
 
     # 是否整块跳过实验
     skip_reason = ""
@@ -257,6 +266,9 @@ def run_task(spec: Any, cfg: RunConfig, *,
     elif cfg.use_evidence and hint.startswith("blocked_by"):
         skip_reason = f"证据层实验前拦截：{hint}"
 
+    if skip_reason:
+        emit("stop", skip_reason, status="skipped", reused_case=reused)
+
     experiments: List[Experiment] = []
     alloc: Dict[str, int] = {}
     if states is None:
@@ -266,20 +278,32 @@ def run_task(spec: Any, cfg: RunConfig, *,
         candidates = _build_hypotheses(ir_node, spec, cfg, hints)
         alloc = _allocate(candidates, cfg, factor, states, notes)
         chosen = _pick(candidates, alloc, cfg.budget)
+        emit("hypothesis", f"实际生成 {len(candidates)} 项候选，本轮选择 {len(chosen)} 项实验",
+             candidate_count=len(candidates), selected_count=len(chosen), budget_alloc=alloc,
+             rule_chains=[c["rule_chain"] for c in chosen])
 
         if not chosen:
             notes.append("假设空间没有产出候选：规则覆盖不足（不是任务不可解）")
         else:
             # ⑤ 同窗锚点：一个任务块前后各一次
+            emit("timing", "正在测量实验前参考耗时", status="running")
             anchor_before = ev_obj.reference(spec.task)
+            emit("timing", "实验前参考耗时已测得", reference_ms=anchor_before)
             medians: List[Tuple[Any, Optional[float], Dict[str, Any]]] = []
             for cand in chosen:
                 exp_seq["n"] += 1
                 eid = f"{exp_prefix}{getattr(spec, 'name', 'task')}-{exp_seq['n']:02d}"
+                emit("validation", f"正在验证候选 {eid}", status="running", experiment_id=eid,
+                     family=cand["family"], rule_chain=cand["rule_chain"])
                 verified = ev_obj.verify(spec.task, cand["source"])
+                emit("verification", f"候选 {eid} {'通过正确性验证' if verified['passed'] else '未通过正确性验证'}",
+                     status="completed" if verified["passed"] else "rejected",
+                     level="info" if verified["passed"] else "warning", experiment_id=eid,
+                     gates=verified["gates"], blocked_by=verified["blocked_by"])
                 median = None
                 note = ""
                 if verified["passed"]:
+                    emit("timing", f"正在计时候选 {eid}", status="running", experiment_id=eid)
                     median = ev_obj.time_candidate(spec.task, cand["source"])
                     if median is None:
                         note = "G4 计时失败（完整性/子进程）"
@@ -311,11 +335,17 @@ def run_task(spec: Any, cfg: RunConfig, *,
                     target_met=bool(speedup is not None and speedup >= cfg.target),
                     note=meta["note"],
                 ))
+                emit("measurement", f"候选 {meta['exp_id']} 测量{'完成' if speedup is not None else '未取得有效结果'}",
+                     experiment_id=meta["exp_id"], result=experiments[-1].to_json(),
+                     status="completed" if speedup is not None else "failed",
+                     level="info" if speedup is not None else "warning")
 
     # ⑦ 裁决
     exp_json = [e.to_json() for e in experiments]
     verdict = decide(spec, ev, exp_json, target=cfg.target,
                      prior_reason=(exact.reason_code if reused else None))
+    emit("verdict", f"本轮裁决：{verdict.reason_code}", verdict=verdict.to_json(),
+         experiment_count=len(experiments), reused_case=reused)
 
     # ⑧ memory（写）：no-memory 只关「读」，写入仍做（诚实：写不影响本 arm 的结果）
     if memory_path is not None and ir_node is not None:

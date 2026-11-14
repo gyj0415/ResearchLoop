@@ -26,11 +26,13 @@ def draft(messages, *, task=None, model=None, skip_reason=None):
             "model": (model or {}).get("model") or "",
             "url": (model or {}).get("ollama_url") or ""}
     rules = rules_draft(messages, task)
+    telemetry = {"usage": {"known": False}, "model_called": bool(model)}
 
     def finish(plan, outcome, reason_code, reason_label, detail="", raw=""):
         plan["log"] = {**base, "outcome": outcome, "reason_code": reason_code,
                        "reason_label": reason_label, "detail": str(detail)[:800],
                        "raw_excerpt": str(raw)[:800],
+                       **telemetry,
                        "elapsed_ms": int((time.perf_counter() - started) * 1000)}
         return plan
 
@@ -40,7 +42,7 @@ def draft(messages, *, task=None, model=None, skip_reason=None):
         return finish(rules, "rules", "skipped", label, label)
     raw = ""
     try:
-        parsed, raw = _ask_model(messages, task, model)
+        parsed, raw = _ask_model(messages, task, model, telemetry=telemetry)
         plan = normalize(parsed)
     except Exception as exc:
         code, label = _failure(exc)
@@ -130,7 +132,7 @@ def _plan(domain, title, question, success, steps, scope, falsify, task_name, re
             "task_name": task_name, "reply": reply}
 
 
-def _ask_model(messages, task, model):
+def _ask_model(messages, task, model, *, telemetry=None):
     name = str(model.get("model") or "")
     if not name or "cloud" in name.lower():
         raise ValueError("请选择本地 Ollama 模型")
@@ -169,6 +171,14 @@ def _ask_model(messages, task, model):
             raise TimeoutError("等待本地模型超过 180 秒") from exc
         raise
     content = result.get("message", {}).get("content", "").strip()
+    if telemetry is not None:
+        known = all(isinstance(result.get(key), int) for key in ("prompt_eval_count", "eval_count"))
+        telemetry.update({"usage": {"known": known,
+                          "input_tokens": result.get("prompt_eval_count"),
+                          "output_tokens": result.get("eval_count"),
+                          "total_tokens": result["prompt_eval_count"] + result["eval_count"] if known else None},
+                          "response_excerpt": content[:12000],
+                          "server_duration_ns": result.get("total_duration")})
     return _load_json(content), content
 
 

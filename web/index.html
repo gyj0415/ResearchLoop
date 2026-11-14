@@ -1,48 +1,56 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme-color="indigo">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#113e36">
+  <meta name="theme-color" content="#f6f7fc">
   <meta name="description" content="ResearchLoop 本地科研智能体工作台：可验证实验、预算控制和可回退研究经验。">
   <title>ResearchLoop · 研究工作台</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <a class="skip-link" href="#main">跳到主要内容</a>
 <aside class="sidebar">
-  <a class="brand" href="#workspace" aria-label="ResearchLoop 首页"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M24 8C10-1-1 17 9 25c9 7 16-2 12-8-4-7-14 0-10 7 8 15 27 5 25-7"/><path d="m30 17 6-2 2 6"/></svg><span>Research<span class="brand-light">Loop</span><small>每一轮，都有所得。</small></span></a>
+  <a class="brand" href="#workspace" aria-label="ResearchLoop 首页"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M24 8C10-1-1 17 9 25c9 7 16-2 12-8-4-7-14 0-10 7 8 15 27 5 25-7"/><path d="m30 17 6-2 2 6"/></svg><span>Research<span class="brand-light">Loop</span><small>可复核 · 可回退</small></span></a>
   <div class="nav-label">工作空间</div>
   <nav aria-label="主导航">
     <button class="nav-item active" data-page="workspace"><span data-icon="grid"></span>研究工作台<span class="nav-arrow">↗</span></button>
-    <button class="nav-item" data-page="records"><span data-icon="layers"></span>实验记录<span class="nav-count" id="run-count">0</span></button>
-    <button class="nav-item" data-page="memory"><span data-icon="spark"></span>研究经验<span class="nav-count" id="memory-count">0</span></button>
-    <button class="nav-item" data-page="data"><span data-icon="database"></span>数据与评估</button>
+    <button class="nav-item" data-page="records"><span data-icon="layers"></span>运行记录<span class="nav-count" id="run-count">0</span></button>
+    <button class="nav-item" data-page="memory"><span data-icon="target"></span>研究经验<span class="nav-count" id="memory-count">0</span></button>
+    <button class="nav-item" data-page="data"><span data-icon="database"></span>材料与工具</button>
     <button class="nav-item" data-page="logs"><span data-icon="clock"></span>日志<span class="nav-count" id="log-count">0</span></button>
   </nav>
-  <div class="sidebar-note"><div class="note-orbit"><span>↻</span></div><strong>从证据出发，<br>让经验回来。</strong><p>假设可以被否决。<br>进化应当可验证。</p></div>
-  <div class="sidebar-bottom"><span class="small-dot"></span><div>LOCAL FIRST<small>本地推理 · 云端关闭</small></div><button id="settings-shortcut" class="icon-button" aria-label="模型设置"><span data-icon="settings"></span></button></div>
+  <div class="sidebar-note"><strong>模型提方案<br>代码做验收</strong><p>每个结论都带复核记录与成本。</p></div>
+  <div class="sidebar-bottom"><span class="small-dot"></span><div>LOCAL FIRST<small>本地优先 · 云端可选</small></div><button id="settings-shortcut" class="icon-button" aria-label="模型设置"><span data-icon="settings"></span></button></div>
 </aside>
 <div class="shell">
-  <header class="topbar"><div class="breadcrumb">工作空间 <span>/</span> <strong id="page-label">研究工作台</strong></div><div class="topbar-right"><span class="local-badge" id="ollama-status"><span class="small-dot"></span>连接 Ollama…</span><button id="settings-button" class="text-button"><span data-icon="settings"></span>模型设置</button><span class="avatar" title="本地研究空间">RL</span></div></header>
+  <header class="topbar"><div class="topbar-left"><button id="sidebar-toggle" class="icon-button sidebar-toggle" aria-label="收起侧栏" aria-expanded="true" title="收起 / 展开侧栏"><span data-icon="menu"></span></button><div class="breadcrumb">工作空间 <span>/</span> <strong id="page-label">研究工作台</strong></div></div><div class="topbar-right"><span class="local-badge" id="ollama-status"><span class="small-dot"></span>连接 Ollama…</span><button id="settings-button" class="text-button"><span data-icon="settings"></span>模型设置</button><span class="avatar" title="本地研究空间">RL</span></div></header>
   <main id="main" tabindex="-1">
     <section id="page-workspace" class="page">
-      <div class="page-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>BOHACK 2026 · AI RESEARCH</div><h1>让下一次研究，少走弯路<span class="heading-dot">。</span></h1><p class="subtitle">提出假设，交给实验。把这一轮的证据，变成下一轮的经验。</p></div><button class="primary-button new-run"><span data-icon="plus"></span>开始研究</button></div>
+      <div class="page-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>研究工作台</div><h1>从问题到可复核的结论<span class="heading-dot">.</span></h1><p class="subtitle">先看证据，再跑实验；结论必须有复核记录。</p></div><button class="primary-button new-run"><span data-icon="plus"></span>开始研究</button></div>
       <div id="notice" class="notice hidden" role="status"></div>
       <section id="composer" class="panel composer" aria-label="研究方向">
-        <div class="panel-header"><div><div class="section-label">RESEARCH DIRECTION</div><h2>先说想研究什么</h2></div><button type="button" class="small-link" id="open-retrieval">已有检索任务</button></div>
+        <div class="panel-header"><div><div class="section-label">QUESTION · EVIDENCE · EXPERIMENT · VERIFY</div><h2>输入研究问题</h2></div><button type="button" class="small-link" id="open-retrieval">旧版检索示例</button></div>
         <div id="brief-thread" class="brief-thread"></div>
-        <div class="composer-box">
-          <textarea id="brief-input" rows="3" placeholder="例如：偏置加完再对时间维取均值，看有没有一种正确且更快的写法。也可以先贴上自己的 reference。"></textarea>
-          <div class="composer-actions">
-            <button type="button" class="chip" data-prompt="偏置加完再取均值，看能不能比 eager 快">可消元的均值</button>
-            <button type="button" class="chip" data-prompt="GELU 之后再取均值，先判断值不值得做">含激活的归约</button>
-            <button type="button" class="chip" data-prompt="我想改进 SciFact 上的证据检索">证据检索</button>
-            <button type="button" class="secondary-button" id="draft-brief">拟定计划</button>
+        <div class="composer-box chat-composer">
+          <textarea id="brief-input" rows="3" placeholder="描述研究问题，或点击下方 + 添加 PDF / Word / PPT / CSV 材料"></textarea>
+          <div class="composer-toolbar">
+            <button type="button" class="attach-button" id="attach-button" aria-label="添加材料" title="添加材料">+</button>
+            <input id="research-files" type="file" multiple accept=".pdf,.docx,.pptx,.txt,.md,.csv,.json" hidden>
+            <div id="research-asset-list" class="asset-chips"></div>
+            <select id="research-model" class="composer-select" aria-label="研究模型"><option value="deepseek-r1:8b">deepseek-r1:8b</option></select>
+            <select id="research-workflow" class="composer-select" aria-label="执行方式"><option value="plan">工作流模式</option><option value="react">ReAct 模式</option></select>
+            <button type="button" class="primary-button" id="draft-brief">启动 ↗</button>
+          </div>
+          <div class="composer-hints">
+            <button type="button" class="chip" id="random-topic">随机课题</button>
+            <label class="check-row compact"><input id="research-use-memory" type="checkbox">参考已发布经验</label>
+            <details class="budget-details"><summary>预算</summary><div class="form-grid three research-options"><label>模型 token<input id="research-tokens" type="number" min="8000" max="150000" value="40000"></label><label>时间 / 秒<input id="research-seconds" type="number" min="30" max="1800" value="600"></label><label>步骤上限<input id="research-steps" type="number" min="4" max="20" value="12"></label></div></details>
           </div>
         </div>
-        <details class="task-adder">
+        <details class="task-adder hidden">
           <summary>加入我的算子</summary>
           <label>任务名<input id="task-name" value="my_op" autocomplete="off"></label>
           <label>shape，用分号隔开<input id="task-shapes" value="4,64,32; 1,31,16" autocomplete="off"></label>
@@ -53,8 +61,9 @@
         <div id="plan-card" class="plan-card hidden"></div>
       </section>
       <div class="metric-grid" id="metrics"></div>
-      <div class="dataset-strip"><div class="dataset-icon" data-icon="database"></div><div><strong>SciFact <span>科学主张证据库</span></strong><p id="dataset-summary">正在检查本地数据…</p></div><div class="dataset-strip-right"><span class="pill subtle">句子级证据</span><span class="pill" id="test-seal">最终测试已封存</span><button class="small-link" data-goto="data">查看数据 <span>↗</span></button></div></div>
+      <div class="dataset-strip"><div class="dataset-icon" data-icon="database"></div><div><strong>材料与工具 <span>由问题决定</span></strong><p id="dataset-summary">正在检查可用工具…</p></div><div class="dataset-strip-right"><span class="pill subtle">代码执行 · 固定判据复核</span><span class="pill hidden" id="test-seal">最终测试已封存</span><button class="small-link" data-goto="data">查看工具 <span>↗</span></button></div></div>
       <section id="diagnostics-panel" class="panel diagnostics-panel hidden" aria-label="失败诊断和研究决策依据"></section>
+      <section id="workflow-panel" class="panel workflow-panel" aria-label="工作流编排"></section>
       <div class="work-grid">
         <section class="panel trajectory-panel"><div class="panel-header"><div><div class="section-label">RESEARCH TRAJECTORY</div><h2>研究轨迹 <span class="counter" id="experiment-counter">0 个实验</span></h2></div><select id="run-select" aria-label="选择研究运行"><option value="">暂无运行</option></select></div>
           <div id="run-meta" class="run-meta"></div>
@@ -63,20 +72,35 @@
         </section>
         <div class="right-column"><section class="panel hypothesis-panel"><div class="section-label">THE CURRENT QUESTION</div><div class="hypothesis-heading"><h2>当前研究假设</h2><span class="mini-icon" data-icon="flask"></span></div><div id="hypothesis"></div></section><section class="panel budget-panel"><div class="panel-header compact"><h2>研究预算</h2><span class="mini-icon" data-icon="gauge"></span></div><div id="budget"></div></section></div>
       </div>
+      <section id="chain-panel" class="panel chain-panel"><div class="panel-header"><div><div class="section-label">DECISION CHAIN</div><h2>决策链 · 子 Agent 调用</h2></div><span class="pill subtle" id="chain-meta">—</span></div><div id="chain"></div></section>
       <section class="panel evidence-panel"><div class="panel-header"><div><div class="section-label">FOLLOW THE EVIDENCE</div><h2>把结论落回证据</h2></div><div class="evidence-selects"><select id="evidence-experiment" aria-label="选择证据对应的实验"></select><select id="evidence-claim" aria-label="选择检查的问题"></select></div></div><div id="evidence"></div></section>
     </section>
-    <section id="page-records" class="page hidden"><div class="page-heading"><div><div class="eyebrow">EXPERIMENT ARCHIVE</div><h1>每一次尝试，都有据可查。</h1><p class="subtitle">真实测量、完整成本，以及被否决的假设。选择一条运行查看原始证据。</p></div><button class="primary-button new-run"><span data-icon="plus"></span>开始研究</button></div><div class="protocol-callout"><span data-icon="compare"></span><div><strong>如何做经验迁移对照</strong><p>先在 A 运行 Agent 并发布经验，再在 B 分别运行无经验 Agent、带经验 Agent、配置沿用与随机搜索。保持相同种子、模型和预算。不同任务的分数不能直接相减。</p></div></div><section class="panel"><div class="panel-header"><h2>运行档案</h2><span class="pill subtle">跨运行不复用结果缓存</span></div><div id="records"></div></section></section>
-    <section id="page-memory" class="page hidden"><div class="page-heading"><div><div class="eyebrow">LEARN · VERIFY · ROLLBACK</div><h1>留下经验，也留下退路。</h1><p class="subtitle">经验是待检验的研究先验。只有通过独立验收的 Agent 运行，才能发布新版本。</p></div><span class="outline-badge" id="active-memory">当前版本 v0</span></div><div class="memory-intro"><div class="memory-intro-mark">↻</div><div><h2>学到的是研究策略。</h2><p>下一次规划会获得经验的适用条件、实验依据与局限，不会继承查询答案或结果缓存。回退保留全部历史记录。</p></div></div><div id="memory-list"></div></section>
-    <section id="page-data" class="page hidden"><div class="page-heading"><div><div class="eyebrow">DATA & EVALUATION</div><h1>把验证放在优化之外。</h1><p class="subtitle">固定证据单元、按文档隔离任务，最终测试在方案冻结后统一开放。</p></div><button id="prepare-button" class="secondary-button"><span data-icon="download"></span>准备公开数据</button></div><div id="data-content"></div><section class="panel final-panel"><div class="panel-header"><div><div class="section-label">ONE-TIME ACCEPTANCE</div><h2>最终测试</h2></div><button id="finalize-button" class="secondary-button">冻结并统一验收</button></div><p class="body-muted">此操作会冻结当前代码版本的所有已完成运行，并统一评估保留测试集。结果开放后，不再作为可反复调参的保留集。实验运行不会读取这部分反馈。</p><div id="final-results"></div></section></section>
-    <section id="page-logs" class="page hidden"><div class="page-heading"><div><div class="eyebrow">ACTIVITY LOG</div><h1>任务进行时的记录。</h1><p class="subtitle">拟定计划、加入算子、检索运行和算子实验都会写在这里。</p></div></div><section class="panel log-panel"><div id="log-view"></div></section></section>
-    <footer><span>ResearchLoop <span class="footer-divider">/</span> 可追溯 · 可复现 · 可回退</span><span>日新 RENEW <span class="footer-divider">·</span> Built for better research.</span></footer>
+    <section id="page-records" class="page hidden"><div class="page-heading"><div><div class="eyebrow">EXPERIMENT ARCHIVE</div><h1>运行记录</h1><p class="subtitle">真实测量、完整成本与失败原因；选择一条运行查看原始证据。</p></div><button class="primary-button new-run"><span data-icon="plus"></span>开始研究</button></div><div class="protocol-callout"><span data-icon="compare"></span><div><strong>经验迁移需要同条件对照</strong><p>同任务、同模型、同预算与种子下比较冷启动、带经验、配置沿用与随机搜索；不同任务的分数不能直接相减。</p></div></div><section class="panel"><div class="panel-header"><h2>运行档案</h2><span class="pill subtle">跨运行不复用结果缓存</span></div><div id="records"></div></section></section>
+    <section id="page-memory" class="page hidden"><div class="page-heading"><div><div class="eyebrow">LEARN · VERIFY · ROLLBACK</div><h1>研究经验</h1><p class="subtitle">经验是待检验的先验；只有通过独立验收的运行才能发布，版本随时可回退。</p></div><span class="outline-badge" id="active-memory">当前版本 v0</span></div><div class="memory-intro"><div class="memory-intro-mark">↻</div><div><h2>记录的是研究方法。</h2><p>下一次规划会获得适用条件、实验依据与局限，不继承查询答案或结果缓存。回退保留全部历史。</p></div></div><div id="memory-list"></div></section>
+    <section id="page-data" class="page hidden"><div class="page-heading"><div><div class="eyebrow">DATA & EVALUATION</div><h1>材料与工具</h1><p class="subtitle">固定证据单元、按文档隔离任务；最终测试在方案冻结后统一开放。</p></div><button id="prepare-button" class="secondary-button"><span data-icon="download"></span>准备公开数据</button></div><div id="data-content"></div><section class="panel final-panel"><div class="panel-header"><div><div class="section-label">ONE-TIME ACCEPTANCE</div><h2>最终测试</h2></div><button id="finalize-button" class="secondary-button">冻结并统一验收</button></div><p class="body-muted">此操作会冻结当前代码版本的所有已完成运行，并统一评估保留测试集。结果开放后，不再作为可反复调参的保留集。实验运行不会读取这部分反馈。</p><div id="final-results"></div></section></section>
+    <section id="page-logs" class="page hidden">
+      <div class="page-heading"><div><div class="eyebrow">EXECUTION LOG</div><h1>执行日志</h1><p class="subtitle">执行状态、模型用量、实验结果与错误原因，可展开核对原始事件。</p></div><button id="export-logs" class="secondary-button" disabled>导出当前列表</button></div>
+      <section class="panel log-panel">
+        <div class="log-toolbar">
+          <label>来源<select id="log-source"><option value="">全部来源</option><option value="planner">拟定计划</option><option value="retrieval">检索研究</option><option value="operator">算子研究</option><option value="api">系统接口</option></select></label>
+          <label>级别<select id="log-level"><option value="">全部级别</option><option value="info">信息</option><option value="warning">警告</option><option value="error">错误</option></select></label>
+          <label>运行<select id="log-run"><option value="">全部运行与请求</option></select></label>
+          <label class="log-search">搜索<input id="log-search" type="search" placeholder="任务、模型、错误或请求 ID"></label>
+          <button id="refresh-logs" class="secondary-button">刷新</button>
+        </div>
+        <p id="log-summary" class="log-summary" role="status">正在读取实际事件…</p>
+        <div id="log-view"></div>
+      </section>
+    </section>
+    <footer><span>ResearchLoop <span class="footer-divider">/</span> 可追溯 · 可复现 · 可回退</span><span>本地优先 · 预算可见</span></footer>
   </main>
 </div>
 <dialog id="run-dialog"><form id="run-form"><div class="dialog-heading"><div><div class="section-label">START A RESEARCH LOOP</div><h2>开启一轮研究</h2></div><button type="button" class="close-dialog icon-button" aria-label="关闭">×</button></div><p class="body-muted">在固定问题集上提出假设、测量效果，再用独立题目验收。</p><div class="form-grid"><label>研究任务<select name="task"><option value="A">A · 来源任务：积累研究经验</option><option value="B">B · 新任务：检验经验迁移</option></select></label><label>执行模式<select name="mode" id="mode-input"><option value="agent">Ollama Agent · 自主研究</option><option value="search">随机搜索 · 确定性对照</option><option value="carry">沿用配置 · 上一轮最佳方案</option></select></label></div><label class="check-row"><input name="use_memory" id="memory-input" type="checkbox"><span>带上已发布的研究经验<small id="memory-form-hint">当前 v0，尚无已发布经验</small></span></label><div class="form-grid three"><label>候选实验上限<input name="max_experiments" type="number" min="1" max="8" value="4" required></label><label>模型 token 上限<input name="token_limit" type="number" min="5000" max="100000" step="1000" value="16000" required></label><label>墙钟时间 / 秒<input name="seconds_limit" type="number" min="10" max="3600" value="900" required></label></div><label>随机种子<input name="seed" type="number" min="0" max="2147483647" value="42" required></label><div class="form-note"><span data-icon="info"></span><span id="mode-description">模型负责假设与实验决策；数值计算和验收由代码完成。失败调用与重试也计入预算。</span></div><div class="dialog-actions"><button type="button" class="secondary-button close-dialog">取消</button><button type="submit" class="primary-button">开始这一轮 <span>↗</span></button></div></form></dialog>
-<dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><div><div class="section-label">LOCAL MODEL</div><h2>连接本地 Ollama</h2></div><button type="button" class="close-dialog icon-button" aria-label="关闭">×</button></div><label>本地服务地址<input name="ollama_url" value="http://127.0.0.1:11434" required></label><label>模型名称<input name="model" id="model-name" list="model-options" value="deepseek-r1:8b" required><datalist id="model-options"></datalist></label><div id="model-details" class="form-note"></div><div class="dialog-actions"><button type="button" id="refresh-models" class="secondary-button">检测服务</button><button type="submit" class="primary-button">保存设置</button></div></form></dialog>
+<dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><div><div class="section-label">MODEL ROUTING</div><h2>本地与云端模型</h2></div><button type="button" class="close-dialog icon-button" aria-label="关闭">×</button></div><div class="section-label">APPEARANCE</div><div class="theme-options"><button type="button" class="theme-option" data-theme-option="indigo" aria-checked="true"><span class="theme-swatch"></span>蓝紫渐变</button><button type="button" class="theme-option" data-theme-option="forest" aria-checked="false"><span class="theme-swatch"></span>松绿</button><button type="button" class="theme-option" data-theme-option="graphite" aria-checked="false"><span class="theme-swatch"></span>石墨</button></div><p class="form-note">主题色只保存在本机浏览器，点选立即生效。</p><label>模型来源<select name="model_source" id="model-source"><option value="local">本地 Ollama（默认）</option><option value="cloud">云端 OpenAI 兼容 API</option></select></label><label>本地服务地址<input name="ollama_url" value="http://127.0.0.1:11434" required></label><label>本地模型名称<input name="model" id="model-name" list="model-options" value="deepseek-r1:8b" required><datalist id="model-options"></datalist></label><div id="model-details" class="form-note"></div><details class="settings-group"><summary>云端 API</summary><p class="form-note">默认关闭；启用后通用研究循环可选择云端模型，检索与算子历史流程保持本地。</p><label class="check-row"><input type="checkbox" id="cloud-enabled"><span>启用云端模型（OpenAI 兼容）</span></label><label>云端服务地址<input name="cloud_base_url" placeholder="https://api.siliconflow.cn/v1"></label><label>云端模型名称<input name="cloud_model" placeholder="例如 deepseek-ai/DeepSeek-V3"></label><label>API Key<input name="cloud_api_key" type="password" autocomplete="off" placeholder="留空则保留已保存的 Key"></label><div id="cloud-details" class="form-note"></div></details><details class="settings-group"><summary>联网工具</summary><p class="form-note">启用后规划角色可用 web_search / web_fetch；抓取会先拦截 localhost 与私有地址。</p><label class="check-row"><input type="checkbox" name="web_enabled" id="web-enabled"><span>启用联网搜索与网页读取</span></label><div class="form-grid"><label>搜索提供方<select name="web_provider" id="web-provider"><option value="searxng">SearXNG（自建/本地）</option><option value="tavily">Tavily</option></select></label><label>最多结果数<input name="web_max_results" type="number" min="1" max="10" value="5"></label></div><label>搜索服务地址<input name="web_endpoint" placeholder="https://search.example.com/search"></label><label>搜索 API Key（Tavily 需要）<input name="web_api_key" type="password" autocomplete="off" placeholder="留空则保留已保存的 Key"></label><div id="web-details" class="form-note"></div></details><details class="settings-group"><summary>角色模型</summary><p class="form-note">规划、实验、复核、报告可分别指定模型；留空则沿用本轮模型。</p><div id="role-models"></div></details><div class="dialog-actions"><button type="button" id="refresh-models" class="secondary-button">检测本地</button><button type="button" id="check-cloud" class="secondary-button">检测云端</button><button type="button" id="check-web" class="secondary-button">检测联网</button><button type="submit" class="primary-button">保存设置</button></div></form></dialog>
 <dialog id="detail-dialog" class="wide-dialog"><div class="dialog-heading"><h2 id="detail-title">原始记录</h2><button type="button" class="close-dialog icon-button" aria-label="关闭">×</button></div><pre id="detail-json"></pre></dialog>
 <dialog id="confirm-dialog"><div class="dialog-heading"><h2>开放最终测试？</h2><button type="button" class="close-dialog icon-button" aria-label="关闭">×</button></div><p class="body-muted">当前代码版本的已完成运行将在此刻冻结，统一验收保留的 80 道题。开放结果之后，不能继续把它称为未见测试集。</p><div class="dialog-actions"><button type="button" class="secondary-button close-dialog">继续保持封存</button><button type="button" id="confirm-finalize" class="primary-button">确认冻结并验收</button></div></dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/app.js" defer></script>
+<script src="/research.js" defer></script>
 </body>
 </html>

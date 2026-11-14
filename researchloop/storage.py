@@ -56,9 +56,30 @@ def source_hash():
     return h.hexdigest()
 
 
+CLOUD_DEFAULTS = {"enabled": False, "base_url": "", "model": "", "api_key": ""}
+WEB_DEFAULTS = {"enabled": False, "search_provider": "searxng", "search_endpoint": "",
+                "search_api_key": "", "max_results": 5, "fetch_max_chars": 6000}
+
+
 def settings():
-    return {"ollama_url": "http://127.0.0.1:11434", "model": "deepseek-r1:8b",
-            "cloud_enabled": False, **read_json(ROOT / "config.json", {})}
+    saved = dict(read_json(ROOT / "config.json", {}) or {})
+    cloud = {**CLOUD_DEFAULTS, **(saved.pop("cloud", None) or {})}
+    web = {**WEB_DEFAULTS, **(saved.pop("web", None) or {})}
+    value = {"ollama_url": "http://127.0.0.1:11434", "model": "deepseek-r1:8b",
+             "model_source": "local", **saved}
+    value["cloud"] = cloud
+    value["web"] = web
+    return value
+
+
+def masked_settings():
+    """Public copy: API keys never leave the machine through the state endpoint."""
+    value = settings()
+    key = str(value["cloud"].get("api_key") or "")
+    value["cloud"] = {**value["cloud"], "api_key": "", "api_key_set": bool(key)}
+    web_key = str(value["web"].get("search_api_key") or "")
+    value["web"] = {**value["web"], "search_api_key": "", "search_api_key_set": bool(web_key)}
+    return value
 
 
 def list_runs():
@@ -142,6 +163,11 @@ def promote(run_id):
                  "created_at": now(), "best_config": run["best_config"]}
         write_json(MEMORY / f"v{version}.json", value)
         write_json(MEMORY / "active.json", {"version": version, "changed_at": now()})
+        from . import db
+        db.memory_add(session_id=None, version=version, scope="retrieval", lesson=value["lesson"],
+                      applicability=value.get("applicability"), evidence=value.get("evidence"),
+                      status=value.get("status", "provisional"), source_run=run_id,
+                      parent_version=value.get("parent_version"), created_at=value.get("created_at"))
         return value
 
 

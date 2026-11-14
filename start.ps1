@@ -11,10 +11,10 @@ if (-not $env:OLLAMA_MODELS) {
     }
 }
 try {
-    $researchLoopExisting = Invoke-RestMethod -Uri 'http://127.0.0.1:8767/api/state' -TimeoutSec 1
+    $researchLoopExisting = Invoke-RestMethod -Uri 'http://127.0.0.1:8768/api/state' -TimeoutSec 1
     if ($researchLoopExisting.settings -and $researchLoopExisting.version) {
-        Write-Host 'ResearchLoop is already running: http://127.0.0.1:8767'
-        Start-Process 'http://127.0.0.1:8767'
+        Write-Host 'ResearchLoop is already running: http://127.0.0.1:8768'
+        Start-Process 'http://127.0.0.1:8768'
         exit 0
     }
 } catch { }
@@ -26,7 +26,7 @@ try {
         Start-Process -FilePath $researchLoopOllama.Source -ArgumentList 'serve' -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $PSScriptRoot '.cache\ollama-start-stdout.log') -RedirectStandardError (Join-Path $PSScriptRoot '.cache\ollama-start-stderr.log')
     }
 }
-Write-Host 'Open ResearchLoop: http://127.0.0.1:8767'
+Write-Host 'Open ResearchLoop: http://127.0.0.1:8768'
 $researchLoopPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (Test-Path -LiteralPath $researchLoopPython) {
     & $researchLoopPython (Join-Path $PSScriptRoot 'run.py')

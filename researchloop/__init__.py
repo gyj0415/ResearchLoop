@@ -1,3 +1,3 @@
-"""ResearchLoop: local, budgeted retrieval experiments."""
+"""ResearchLoop: question-driven, budgeted research with executable evidence."""
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"

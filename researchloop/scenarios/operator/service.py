@@ -75,7 +75,8 @@ def begin(task_name, *, seconds_limit=120, max_experiments=4, runs_root=None, br
         "brief": _brief(brief),
     }
     _save(run_dir, run)
-    _event(run_dir, run, "setup", "加载算子任务；评估器不接受模型改写")
+    _event(run_dir, run, "setup", f"开始加载算子任务 {task_name}", status="running",
+           task_file=str(resolve_task_file(task_name)), max_experiments=int(max_experiments))
     return run, run_dir
 
 
@@ -87,7 +88,8 @@ def complete(run, run_dir, runner=None):
     previous = os.environ.get("RESEARCH_TASK_DIRS")
     os.environ["RESEARCH_TASK_DIRS"] = task_search_path()
     try:
-        task_run = _run(task_name, int(run["max_experiments"]), runner)
+        task_run = _run(task_name, int(run["max_experiments"]), runner,
+                        on_event=lambda kind, text, **data: _event(run_dir, run, kind, text, **data))
     except Exception as exc:
         run["status"] = "failed"
         run["error"] = f"{type(exc).__name__}: {exc}"
@@ -112,9 +114,6 @@ def complete(run, run_dir, runner=None):
     })
     _write(run_dir / "experiment.json", payload["experiments"])
     _write(run_dir / "verdict.json", verdict)
-    _event(run_dir, run, "evidence", payload.get("verdict_hint") or payload.get("skip_reason") or "证据已记录")
-    _event(run_dir, run, "hypothesis", payload.get("skip_reason") or f"{len(payload['experiments'])} 个候选")
-    _event(run_dir, run, "verdict", verdict.get("reason_code") or "无裁决")
     run["operator_experiments"] = payload["experiments"]
     run["verdict"] = verdict
     run["verdict_hint"] = payload.get("verdict_hint")
@@ -131,11 +130,16 @@ def complete(run, run_dir, runner=None):
         run["status"] = "completed"
         if verdict.get("reason_code") in PUBLISHABLE:
             run["memory_candidate"] = _candidate(task_name, verdict, payload)
+    _event(run_dir, run, "completed", f"算子研究结束：{verdict.get('reason_code') or '未形成裁决'}",
+           status=run["status"], level="warning" if over_time else "info",
+           elapsed_ms=round(elapsed * 1000), verdict=verdict,
+           experiment_count=len(payload["experiments"]), reused_case=payload.get("reused_case", False),
+           artifacts=["evidence.json", "hypothesis.json", "experiment.json", "verdict.json"])
     _save(run_dir, run)
     return run
 
 
-def _run(task_name, max_experiments, runner):
+def _run(task_name, max_experiments, runner, on_event=None):
     if runner is not None:
         return runner(task_name, max_experiments)
     from researchloop.scenarios.operator.intake import load
@@ -143,7 +147,7 @@ def _run(task_name, max_experiments, runner):
 
     spec = load(resolve_task_file(task_name))
     return run_task(spec, RunConfig(budget=max_experiments, max_candidates=max_experiments),
-                    memory_path=storage.RUNS / "operator-cases.jsonl")
+                    memory_path=storage.RUNS / "operator-cases.jsonl", on_event=on_event)
 
 
 def _brief(value):
@@ -174,12 +178,18 @@ def _candidate(task_name, verdict, payload):
     }
 
 
-def _event(run_dir, run, kind, text):
-    item = {"at": storage.now(), "type": kind, "text": text}
+def _event(run_dir, run, kind, text, **data):
+    item = {"at": storage.now(), "type": kind, "text": text, **data}
     run["events"].append(item)
     with (run_dir / "events.jsonl").open("a", encoding="utf-8") as output:
         output.write(json.dumps(item, ensure_ascii=False) + "\n")
-    activity.record(kind, text, run_id=run.get("id", ""), task=run.get("task", ""), source="operator")
+    activity.record(kind, text, log_file=run_dir.parent / "activity.jsonl",
+                    run_id=run.get("id", ""), task=run.get("task", ""), source="operator", actor="tool",
+                    status=data.get("status", "failed" if kind == "error" else "completed"),
+                    level=data.get("level", "error" if kind == "error" else "info"),
+                    elapsed_ms=data.get("elapsed_ms"), data=data)
+    run["updated_at"] = storage.now()
+    _save(run_dir, run)
 
 
 def _save(run_dir, run):

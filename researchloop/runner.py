@@ -143,10 +143,24 @@ class ResearchService:
             run["events"].append(item)
             with (RUNS / run["id"] / "events.jsonl").open("a", encoding="utf-8") as output:
                 output.write(json.dumps(item, ensure_ascii=False) + "\n")
-            activity.record(kind, text, run_id=run["id"], task=run.get("task", ""), source="retrieval")
+            level = "error" if kind == "error" else "warning" if kind in ("invalid_decision", "budget_stop") or extra.get("passed") is False or extra.get("accepted") is False else "info"
+            activity.record(kind, text, log_file=RUNS / "activity.jsonl", run_id=run["id"],
+                            task=run.get("task", ""), source="retrieval", level=level,
+                            status="running" if kind in ("setup", "planning", "baseline", "validation") else run["status"] if kind in ("completed", "error", "cancelled", "budget_stop") else "completed",
+                            data=extra, actor="ollama" if kind == "planning" else "tool")
             save()
         def on_call(item):
             run["calls"].append(item)
+            activity.record("model_call", "研究模型调用完成" if item.get("status") == "ok" else "研究模型调用失败",
+                            log_file=RUNS / "activity.jsonl", run_id=run["id"], task=run["task"],
+                            source="retrieval", actor="ollama", model=item.get("model"),
+                            level="info" if item.get("status") == "ok" else "error",
+                            status="completed" if item.get("status") == "ok" else "failed",
+                            elapsed_ms=round(item.get("wall_seconds", 0) * 1000),
+                            usage={"known": "input_tokens" in item and "output_tokens" in item,
+                                   "input_tokens": item.get("input_tokens"), "output_tokens": item.get("output_tokens"),
+                                   "total_tokens": item.get("input_tokens", 0) + item.get("output_tokens", 0) if "input_tokens" in item and "output_tokens" in item else None},
+                            data=item)
             save()
         def stopped():
             if cancel.is_set():
