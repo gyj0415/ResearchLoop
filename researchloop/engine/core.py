@@ -421,7 +421,7 @@ class ResearchEngine:
             # Report prose needs content and actual measurements, not source titles alone.
             prompt["report_evidence"] = [{"id": source["id"], "title": source.get("title"),
                                           "scope": source.get("evidence_scope"),
-                                          "excerpt": str(source.get("text") or source.get("content") or source.get("abstract") or "")[:400]}
+                                          "excerpt": str(source.get("text") or source.get("content") or source.get("abstract") or "")[:900]}
                                          for source in run["sources"][-6:]]
             prompt["report_measurements"] = [{key: experiment.get(key) for key in
                                                ("id", "hypothesis_id", "result", "check", "verification", "error")}
@@ -566,6 +566,10 @@ class ResearchEngine:
         if role:
             permitted = set(roles.tools_for(role))
             names = [name for name in names if name in permitted]
+            if role == "reporter" and not (run.get("gap_fill") or {}).get("required"):
+                names = ["finish"]
+            elif run.get("workflow_mode") == "plan" and role != "reporter":
+                names = [name for name in names if name != "finish"]
             if not names:
                 names = ["plan"] if not run.get("plan") else ["finish"]
         if run.get('is_subagent'):
@@ -675,6 +679,10 @@ class ResearchEngine:
                         self.run.get("sources") or self.run.get("documents") or self.run.get("experiments")):
                     self.run["status"] = "inconclusive"
                     self.run["stop_reason"] = self.run.get("stop_reason") or "达到步骤或预算上限，已生成证据缺口报告"
+            if self.run["status"] != "completed":
+                for pending in self.run.get("pending_facts", []):
+                    if pending["status"] == "pending_report":
+                        pending["status"] = "not_published"
             if turn is not None:
                 turn["status"], turn["finished_at"] = self.run["status"], self.run["finished_at"]
                 turn["conclusion"] = str(report_now.get("conclusion", ""))
@@ -1110,6 +1118,8 @@ class ResearchEngine:
             else:
                 run["status"] = "completed" if verified else "incomplete"
             run["report"] = report
+            if run["status"] == "completed":
+                extratools.commit_report_facts(self, citations)
             return {"status": run["status"], "verified_experiments": len(verified),
                     "evidence_gaps": report.get("evidence_gaps", []),
                     "note": "有复核记录不代表假设成立，须查看固定判据结果。"}
@@ -1123,15 +1133,15 @@ class ResearchEngine:
                 text = info.get("message") or step.get("observation", {}).get("error")
                 if text and text not in errors:
                     errors.append(text)
-        gaps = errors[-4:]
-        if not self.run.get("sources") and not self.run.get("experiments"):
-            gaps.append("未取得外部证据或可验证实验结果；记忆和常识推断不作为研究证据。")
-        elif not gaps:
-            gaps.append(f"已收集 {len(self.run.get('sources', []))} 条来源、"
-                        f"{len(self.run.get('experiments', []))} 项实验，但没有形成可引用结论。")
-        reason = "；".join(gaps) or self.run.get("error") or self.run.get("stop_reason") or "本轮未形成可引用结论"
+        if self.run.get("sources") or self.run.get("experiments"):
+            reason = (f"已收集 {len(self.run.get('sources', []))} 条来源、"
+                      f"{len(self.run.get('experiments', []))} 项实验，但未形成通过校验的报告")
+        else:
+            reason = "未取得外部证据或可验证实验结果；记忆不是证据，常识推断不作为研究证据"
+        gaps = [reason]
         return {"conclusion": "未完成：" + reason, "citations": [], "lesson": "", "evidence_gaps": gaps,
-                "recovery": {"reason": reason, "next_steps": ["修复不可用服务的配置，或从调用节点分支改用其他来源", "依据真实证据重新核验问题前提与结论"]}}
+                "recovery": {"reason": reason, "execution_errors": errors[-4:],
+                             "next_steps": ["查看失败调用并修正工作流或工具参数", "依据已有来源重新核验问题前提与结论"]}}
 
     def write_report(self):
         current = reporting.markdown(reporting.document(self.run))
