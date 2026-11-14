@@ -385,7 +385,7 @@ class ResearchEngine:
             return raw[:limit]
 
         observations = [{"tool": step["tool"], "status": step["status"],
-                         "observation": compact(step.get("observation"), 5000 if step['tool'] in ('read_file','read_subagents') else 4000 if step['tool']=='run_command' else 500)}
+                         "observation": compact(step.get("observation"), 5000 if step['tool'] in ('read_file','read_subagents','web_fetch') else 4000 if step['tool']=='run_command' else 500)}
                         for step in run["steps"][-3:]]
         prompt = {"question": self.question_text(), "branch_note": run.get("branch_note"),
                   "branch_context": run.get("branch_context"), "decision_feedback": run.get("decision_feedback"),
@@ -426,10 +426,21 @@ class ResearchEngine:
         report_stage = "finish" in options and (options == ["finish"] or (run.get("active_agent") or {}).get("role") == "reporter")
         if report_stage:
             # Report prose needs content and actual measurements, not source titles alone.
+            selected_sources = []
+            seen_urls = set()
+            with_body = [source for source in run["sources"] if source.get("content") or source.get("text")]
+            for source in [*reversed(with_body[-4:]), *reversed(run["sources"])]:
+                key = source.get("url") or source["id"]
+                if key in seen_urls:
+                    continue
+                seen_urls.add(key)
+                selected_sources.append(source)
+                if len(selected_sources) == 6:
+                    break
             prompt["report_evidence"] = [{"id": source["id"], "title": source.get("title"),
                                           "scope": source.get("evidence_scope"),
-                                          "excerpt": str(source.get("text") or source.get("content") or source.get("abstract") or "")[:900]}
-                                         for source in run["sources"][-6:]]
+                                          "excerpt": str(source.get("text") or source.get("content") or source.get("abstract") or "")[:2200]}
+                                         for source in selected_sources]
             prompt["report_measurements"] = [{key: experiment.get(key) for key in
                                                ("id", "hypothesis_id", "result", "check", "verification", "error")}
                                               for experiment in run["experiments"][-6:]]
@@ -1130,9 +1141,13 @@ class ResearchEngine:
             verified = [e for e in run["experiments"] if e.get("verification") and e["id"] in citations]
             kind = run.get("research_kind") or self.infer_kind()
             run["research_kind"] = kind
-            substantive = bool(run.get("documents")) or any(
-                "正文" in scope or "网页搜索摘要" in scope
-                for scope in (source.get("evidence_scope") or "" for source in run["sources"]))
+            substantive = any(asset["id"] in citations for asset in run.get("assets", [])) or any(
+                document.get("asset_id") in citations for document in run.get("documents", [])) or any(
+                source["id"] in citations
+                and ("正文" in str(source.get("evidence_scope") or "") or
+                     "网页搜索摘要" in str(source.get("evidence_scope") or ""))
+                and str(source.get("content") or source.get("text") or source.get("abstract") or "").strip()
+                for source in run["sources"])
             report = {"conclusion": str(args.get("conclusion", "")), "citations": citations,
                       "lesson": str(args.get("lesson", ""))}
             manuscript = reporting.validate_manuscript(args.get("manuscript"), citations)

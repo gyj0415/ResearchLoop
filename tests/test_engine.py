@@ -285,6 +285,120 @@ class ResearchEngineTests(unittest.TestCase):
         self.assertIn("测试正文", run["steps"][0]["observation"]["content"])
         self.assertIn("[p1]", (engine.folder / "report.md").read_text(encoding="utf-8"))
 
+    def test_fetched_article_after_navigation_reaches_next_agent_and_reporter(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        page_text = "站点导航\n" * 260 + "正文：奶蛙是奶龙形象的二次创作。"
+        page = {"url": "https://example.org/article", "title": "测试条目", "content": page_text,
+                "fetched_at": "fixture", "truncated": False}
+        base = storage.settings()
+        web = {**base["web"], "enabled": True}
+        captured = []
+
+        def complete(system, prompt, schema, **kwargs):
+            captured.append(prompt)
+            return {"tool": "finish", "reason": "完成报告",
+                    "args": {"conclusion": "依据条目正文作有限说明。", "citations": ["p1"], "lesson": ""}}, {"source": "fixture"}
+
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}), \
+                patch("researchloop.webaccess.fetch", return_value=page):
+            engine.apply("web_fetch", {"url": page["url"]})
+            engine.run["steps"].append({"id": "s1", "tool": "web_fetch", "status": "completed",
+                                        "observation": {"content": page_text}, "turn": "t1"})
+            engine.run["plan"] = {"feasible": True, "method": "查阅正文", "research_kind": "qualitative"}
+            engine.run["active_agent"] = {"id": "g1", "role": "reporter"}
+            engine.complete = complete
+            engine.agent_step()
+        self.assertIn("正文：奶蛙是奶龙形象的二次创作", str(captured[0]["observations"]))
+        self.assertIn("正文：奶蛙是奶龙形象的二次创作", str(captured[0]["report_evidence"]))
+
+    def test_repeated_fetch_of_same_article_keeps_one_body_source(self):
+        engine = self.engine()
+        page = {"url": "https://example.org/article", "title": "测试条目",
+                "content": "这是一段可以核对的条目正文。" * 20, "fetched_at": "fixture", "truncated": False}
+        base = storage.settings()
+        web = {**base["web"], "enabled": True}
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}), \
+                patch("researchloop.webaccess.fetch", return_value=page):
+            first = engine.apply("web_fetch", {"url": page["url"]})
+            second = engine.apply("web_fetch", {"url": page["url"], "max_chars": 20000})
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(len(engine.run["sources"]), 1)
+        self.assertTrue(second["reused"])
+
+    def test_search_hit_is_upgraded_to_body_without_new_evidence_id(self):
+        engine = self.engine()
+        url = "https://example.org/article"
+        engine.run["sources"] = [{"id": "p1", "title": "条目", "url": url,
+                                  "abstract": "搜索摘录中的可核查线索。",
+                                  "evidence_scope": "网页搜索摘要（fixture）"}]
+        page = {"url": url, "title": "条目", "content": "条目正文描述了实际关系。" * 20,
+                "fetched_at": "fixture", "truncated": False}
+        base = storage.settings()
+        web = {**base["web"], "enabled": True}
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}), \
+                patch("researchloop.webaccess.fetch", return_value=page):
+            result = engine.apply("web_fetch", {"url": url})
+        self.assertEqual(result["id"], "p1")
+        self.assertEqual(len(engine.run["sources"]), 1)
+        self.assertEqual(engine.run["sources"][0]["abstract"], "搜索摘录中的可核查线索。")
+        self.assertEqual(engine.run["sources"][0]["content"], page["content"])
+        self.assertEqual(engine.run["sources"][0]["evidence_scope"], "网页正文")
+
+    def test_reporter_includes_older_source_upgraded_with_body(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        engine.run["plan"] = {"feasible": True, "method": "读取网页", "research_kind": "qualitative"}
+        engine.run["research_kind"] = "qualitative"
+        engine.run["sources"] = [
+            {"id": "p1", "title": "原始条目", "url": "https://example.org/article",
+             "content": "条目正文确认了待核查的关系。", "evidence_scope": "网页正文"},
+            *[{"id": f"p{i}", "title": f"无关线索{i}", "url": f"https://example.org/{i}",
+               "abstract": "另一条索引", "evidence_scope": "网页搜索摘要"}
+              for i in range(2, 11)],
+        ]
+        engine.run["active_agent"] = {"id": "g1", "role": "reporter"}
+        captured = []
+
+        def complete(system, prompt, schema, **kwargs):
+            captured.append(prompt)
+            return {"tool": "finish", "args": {
+                "conclusion": "原始条目提供了待核查的关系描述。", "citations": ["p1"], "lesson": ""}}, {"source": "fixture"}
+
+        engine.complete = complete
+        engine.agent_step()
+        self.assertIn("p1", [source["id"] for source in captured[0]["report_evidence"]])
+        self.assertIn("条目正文确认了待核查的关系", str(captured[0]["report_evidence"]))
+
+    def test_longer_fetch_extends_existing_truncated_source(self):
+        engine = self.engine()
+        url = "https://example.org/article"
+        pages = iter([
+            {"url": url, "title": "条目", "content": "前段", "fetched_at": "first", "truncated": True},
+            {"url": url, "title": "条目", "content": "前段与后段", "fetched_at": "second", "truncated": False},
+        ])
+        base = storage.settings()
+        web = {**base["web"], "enabled": True}
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}), \
+                patch("researchloop.webaccess.fetch", side_effect=lambda *a, **kw: next(pages)):
+            first = engine.apply("web_fetch", {"url": url})
+            second = engine.apply("web_fetch", {"url": url, "max_chars": 20000})
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(len(engine.run["sources"]), 1)
+        self.assertEqual(engine.run["sources"][0]["content"], "前段与后段")
+        self.assertFalse(engine.run["sources"][0]["truncated"])
+
+    def test_uncited_article_cannot_complete_metadata_only_report(self):
+        engine = self.engine()
+        engine.run["research_kind"] = "literature"
+        engine.run["sources"] = [
+            {"id": "p1", "title": "无关正文", "url": "https://example.org/a",
+             "content": "另一话题的真实内容。", "evidence_scope": "网页正文"},
+            {"id": "p2", "title": "待核实条目", "url": "https://example.org/b",
+             "abstract": "", "evidence_scope": "只有元数据，不是结论证据"},
+        ]
+        result = engine.apply("finish", {"conclusion": "该条目目前只有元数据，无法确认具体关系。",
+                                          "citations": ["p2"], "lesson": ""})
+        self.assertEqual(result["status"], "inconclusive")
+
     def test_qualitative_plan_skips_unneeded_experiment_and_reports_evidence(self):
         engine = self.engine(workflow_mode="plan", use_memory=False)
         engine.run["workflow"] = {"source": "fixture", "stages": workflow.validate([

@@ -42,13 +42,38 @@ def web_fetch(engine, args):
     config = _web_settings()
     if not config.get("enabled"):
         raise ValueError("联网工具未启用：请先在设置中启用并配置搜索服务")
-    page = webaccess.fetch(args.get("url"), max_chars=args.get("max_chars") or config.get("fetch_max_chars") or 6000)
+    url = str(args.get("url") or "")
+    existing = next((source for source in engine.run["sources"]
+                     if source.get("url") == url and source.get("content")), None)
+    if existing and existing.get("truncated") is False:
+        return {"id": existing["id"], "url": url, "title": existing["title"],
+                "content": existing["content"], "chars": len(existing["content"]),
+                "truncated": False, "reused": True,
+                "note": "本轮已读取完整页面，直接复用已有正文；重复读取不是独立来源。"}
+    page = webaccess.fetch(url, max_chars=args.get("max_chars") or config.get("fetch_max_chars") or 6000)
+    existing = next((source for source in engine.run["sources"]
+                     if source.get("url") == page["url"]), None)
+    if existing and (not existing.get("content") or page["content"] == existing["content"] or
+                     page["content"].startswith(existing["content"])):
+        if not existing.get("content"):
+            existing["search_evidence_scope"] = existing.get("evidence_scope")
+            existing["evidence_scope"] = "网页正文"
+        if not existing.get("content") or len(page["content"]) > len(existing["content"]):
+            existing.update(content=page["content"], content_chars=len(page["content"]),
+                            truncated=page["truncated"], fetched_at=page["fetched_at"])
+            existing.setdefault("abstract", page["content"][:1800])
+        engine.run["evidence_collected"] = True
+        return {"id": existing["id"], "url": page["url"], "title": existing["title"],
+                "content": existing["content"], "chars": len(existing["content"]),
+                "truncated": existing.get("truncated", False), "reused": True,
+                "note": "同一URL的搜索摘要或正文已存在；抓取结果更新原证据ID，不能作为另一独立来源。"}
     note = ""
     if len(page["content"]) < 200:
         note = "正文很短：页面可能需要登录或由脚本渲染，未获取到主要内容"
     entry = {"id": f"p{len(engine.run['sources']) + 1}", "title": page["title"], "url": page["url"],
              "abstract": page["content"][:1800], "content": page["content"], "evidence_scope": "网页正文",
-             "fetched_at": page["fetched_at"], "content_chars": len(page["content"])}
+             "fetched_at": page["fetched_at"], "content_chars": len(page["content"]),
+             "truncated": page["truncated"]}
     engine.run["sources"].append(entry)
     engine.run["evidence_collected"] = True
     return {"id": entry["id"], "url": page["url"], "title": page["title"],
