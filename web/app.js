@@ -24,7 +24,7 @@ const paths = {
 };
 function icon(name) { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.info}</svg>`; }
 $$('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
-const statuses = {queued:'等待中',running:'研究中',completed:'已完成',failed:'调用失败',cancelled:'已停止',budget_stopped:'预算停止',interrupted:'服务重启中断'};
+const statuses = {queued:'排队中',running:'研究中',completed:'已完成',failed:'调用失败',cancelled:'已停止',budget_stopped:'预算停止',interrupted:'服务重启中断'};
 let state = null, run = null, selectedId = localStorage.getItem('rl-selected-run') || '', page = 'workspace';
 let evidenceExperiment = '', evidenceClaim = '', evidenceKey = '', lastRunStamp = '', refreshing = false, lastBudgetStamp = 0;
 let modelStatus = {available:false,models:[]};
@@ -60,19 +60,28 @@ window.addEventListener('hashchange',() => goto(location.hash.slice(1)));
 $$('.close-dialog').forEach(el => el.addEventListener('click',() => el.closest('dialog').close()));
 $$('dialog').forEach(dialog => dialog.addEventListener('click',e => {if (e.target === dialog) {const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();}}));
 
-async function refresh(force=false) {
-  if (refreshing) return;
-  refreshing = true;
+let refreshTask=null,refreshNeeded=false,pendingSelectionId='';
+function refresh(force=false){
+  if(force)refreshNeeded=true;
+  if(refreshTask)return refreshTask;
+  refreshTask=(async()=>{do{const forced=refreshNeeded;refreshNeeded=false;await refreshOnce(forced);}while(refreshNeeded);})().finally(()=>{refreshTask=null;});
+  return refreshTask;
+}
+async function refreshOnce(force=false) {
   try {
     state = await api('/api/state');
-    if (!state.runs.some(r => r.id === selectedId)) selectedId = state.active_run || state.runs.find(r=>r.domain==='research')?.id || '';
+    if ((!pendingSelectionId||pendingSelectionId!==selectedId)&&!state.runs.some(r => r.id === selectedId)) selectedId = (state.running_runs||state.active_runs||[])[0] || state.runs.find(r=>r.domain==='research')?.id || '';
     const oldOptions = $('#run-select').innerHTML;
     const options = state.runs.length ? state.runs.map(r => `<option value="${esc(r.id)}">${esc(r.task)} · ${esc(modeLabel(r))} · ${esc(r.id.slice(9,15))}</option>`).join('') : '<option value="">暂无运行</option>';
     if (oldOptions !== options) $('#run-select').innerHTML = options;
     $('#run-select').value = selectedId;
     const summary = state.runs.find(r => r.id === selectedId);
-    if (selectedId && (force || !run || run.id !== selectedId || summary?.status === 'running' || summary?.status === 'queued' || run.status !== summary?.status)) {
-      run = await api(`/api/runs/${selectedId}`); lastBudgetStamp = Date.now();
+    if (selectedId && (force || !run || run.id !== selectedId || summary?.status === 'running' || ['queued','pausing'].includes(summary?.status) || run.status !== summary?.status)) {
+      const requestedId=selectedId,next=await api(`/api/runs/${requestedId}`);
+      if(requestedId!==selectedId){refreshNeeded=true;return;}
+      run=next;lastBudgetStamp=Date.now();
+      if(pendingSelectionId===requestedId)pendingSelectionId='';
+      if(!state.runs.some(item=>item.id===requestedId))refreshNeeded=true;
     }
     if (!selectedId) run = null;
     renderTop(); renderMetrics(); renderMemory(); renderData();
@@ -80,12 +89,15 @@ async function refresh(force=false) {
     if (force || stamp !== lastRunStamp) { lastRunStamp = stamp; renderRun(); }
     renderBudget();
   } catch(error) { $('#notice').textContent = `本地服务连接异常：${error.message}`; $('#notice').classList.remove('hidden'); }
-  finally { refreshing=false; }
 }
 function renderTop() {
-  const notice=run?.error||run?.stop_reason||'';
+  const notice=page==='session'?(run?.error||run?.stop_reason||''):'';
   $('#notice').textContent=notice;$('#notice').classList.toggle('hidden',!notice);
-  $$('.new-run').forEach(el=>el.disabled=!!state.active_run);
+  $$('.new-run').forEach(el=>el.disabled=false);
+  const running=(state.running_runs||[]).length,queued=(state.queued_runs||[]).length;
+  $('#research-activity').classList.toggle('hidden',!running&&!queued);
+  $('#research-activity').textContent=`${running} 项运行中${queued?' · '+queued+' 项排队':''}`;
+  $('#research-activity').title=`同时运行上限 ${state.max_parallel_sessions||3}；点击新建研究`;
 }
 function metric(label,value,unit,bottom,which='target',extra='') {
   return `<article class="metric-card"><div class="metric-top"><span>${label}</span><span class="metric-icon">${icon(which)}</span></div><div class="metric-value">${value}<small>${unit}</small></div><div class="metric-bottom">${extra}${bottom}</div></article>`;
@@ -129,11 +141,11 @@ function renderBudget(){
 function renderMemory(){}
 function renderData(){}
 function showDetail(title,value){$('#detail-title').textContent=title;$('#detail-json').textContent=JSON.stringify(value,null,2);$('#detail-dialog').showModal();}
-async function selectRun(id){selectedId=id;localStorage.setItem('rl-selected-run',id);evidenceKey='';evidenceClaim='';evidenceExperiment='';goto('session');await refresh(true);}
+async function selectRun(id){pendingSelectionId=id;selectedId=id;localStorage.setItem('rl-selected-run',id);evidenceKey='';evidenceClaim='';evidenceExperiment='';goto('session');await refresh(true);}
 $('#run-select').addEventListener('change',e=>selectRun(e.target.value));
 $$('.new-run').forEach(el=>el.addEventListener('click',()=>{document.getElementById('composer').scrollIntoView({block:'center'});$('#brief-input').focus();}));
 async function checkModels(){const badge=$('#ollama-status');badge.innerHTML='<span class="loader"></span>检查 Ollama…';try{modelStatus=await api('/api/ollama');badge.classList.toggle('offline',!modelStatus.available);badge.innerHTML=`<span class="small-dot"></span>${modelStatus.available?'Ollama 已连接':'Ollama 未连接'}`;$('#model-options').innerHTML=modelStatus.models.filter(m=>!m.name.toLowerCase().includes('cloud')).map(m=>`<option value="${esc(m.name)}">${esc(m.details?.parameter_size||'')}</option>`).join('');const cloud=state?.settings?.cloud||{};$('#model-details').textContent=modelStatus.available?`检测到 ${modelStatus.models.length} 个本地模型。当前本地默认 ${state?.settings.model||'未设置'}。${cloud.enabled?`云端已启用：${cloud.model}`:'云端未启用。'}`:`本地服务未连接：${modelStatus.error}。请运行 ollama serve，再检测服务。`;}catch(e){badge.textContent='连接检测失败';toast(e.message);}}
-function fillCloudSettings(){fillRoutingSettings();const c=state?.settings?.cloud||{},w=state?.settings?.web||{},form=$('#settings-form');$('#model-source').value=state?.settings?.model_source||'local';$('#cloud-enabled').checked=!!c.enabled;form.querySelector('[name=cloud_base_url]').value=c.base_url||'';form.querySelector('[name=cloud_model]').value=c.model||'';form.querySelector('[name=cloud_api_key]').value='';$('#cloud-details').textContent=c.api_key_set?'已保存 API Key（页面不回显明文）。':'尚未保存 API Key；启用云端模型前需填写。';$('#web-enabled').checked=!!w.enabled;form.querySelector('[name=web_provider]').value=w.search_provider||'searxng';form.querySelector('[name=web_endpoint]').value=w.search_endpoint||'';form.querySelector('[name=web_api_key]').value='';form.querySelector('[name=web_max_results]').value=w.max_results||5;const bdg=state?.settings?.budgets||{};form.querySelector('[name=budget_tokens_k]').value=bdg.tokens_k||60;form.querySelector('[name=budget_seconds]').value=bdg.seconds??'';form.querySelector('[name=budget_steps]').value=bdg.steps??'';describeSearchConfig();}
+function fillCloudSettings(){$('#parallel-sessions').value=state?.settings?.execution?.max_parallel_sessions||3;$('#parallel-settings-note').textContent='';fillRoutingSettings();const c=state?.settings?.cloud||{},w=state?.settings?.web||{},form=$('#settings-form');$('#model-source').value=state?.settings?.model_source||'local';$('#cloud-enabled').checked=!!c.enabled;form.querySelector('[name=cloud_base_url]').value=c.base_url||'';form.querySelector('[name=cloud_model]').value=c.model||'';form.querySelector('[name=cloud_api_key]').value='';$('#cloud-details').textContent=c.api_key_set?'已保存 API Key（页面不回显明文）。':'尚未保存 API Key；启用云端模型前需填写。';$('#web-enabled').checked=!!w.enabled;form.querySelector('[name=web_provider]').value=w.search_provider||'searxng';form.querySelector('[name=web_endpoint]').value=w.search_endpoint||'';form.querySelector('[name=web_api_key]').value='';form.querySelector('[name=web_max_results]').value=w.max_results||5;const bdg=state?.settings?.budgets||{};form.querySelector('[name=budget_tokens_k]').value=bdg.tokens_k||60;form.querySelector('[name=budget_seconds]').value=bdg.seconds??'';form.querySelector('[name=budget_steps]').value=bdg.steps??'';describeSearchConfig();}
 let roleCatalog=[];
 async function renderRoleModels(){const saved=state?.settings?.roles||{};if(!roleCatalog.length){try{const data=await api('/api/roles');roleCatalog=data.roles||[];}catch(e){roleCatalog=[];}}const cloud=state?.settings?.cloud||{};$('#role-models').innerHTML=roleCatalog.map(r=>{const c=saved[r.role]||{};return `<div class="role-row" data-role="${esc(r.role)}"><span>${esc(r.label)}</span><select><option value="">沿用本轮模型</option><option value="local">本地</option><option value="cloud">云端</option></select><input placeholder="${esc(cloud.enabled?(cloud.model||'云端模型'):'模型名')}" value="${esc(c.model||'')}"></div>`;}).join('');document.querySelectorAll('#role-models .role-row').forEach(row=>{const conf=saved[row.dataset.role]||{};row.querySelector('select').value=conf.model_source||'';});}
 function openSettings(){if(state){$('#settings-form [name=ollama_url]').value=state.settings.ollama_url;$('#model-name').value=state.settings.model;fillCloudSettings();}$('#settings-dialog').showModal();checkModels();renderRoleModels();}
@@ -178,7 +190,7 @@ function sidebarSessionDate(value){
 function renderSidebarSessions(){
   const box=$('#sidebar-sessions');if(!box)return;
   const runs=(state?.runs||[]).filter(r=>r.domain==='research'&&!r.archived);
-  const labels={queued:'等待中',running:'研究中',pausing:'正在暂停',paused:'已暂停',completed:'已完成',inconclusive:'证据不足',incomplete:'未完成',budget_stopped:'预算耗尽',cancelled:'已停止',interrupted:'已中断',failed:'执行失败'};
+  const labels={queued:'排队中',running:'研究中',pausing:'正在暂停',paused:'已暂停',completed:'已完成',inconclusive:'证据不足',incomplete:'未完成',budget_stopped:'预算耗尽',cancelled:'已停止',interrupted:'已中断',failed:'执行失败'};
   const count=$('#sidebar-session-count');if(count){count.textContent=runs.length;count.title=`${runs.length} 个未归档研究会话`;}
   let group='';
   const content=runs.length?runs.map(r=>{
@@ -264,3 +276,9 @@ function describeSearchConfig(){
     :'已保存搜索服务配置；连接状态请通过“检测联网”确认。';
 }
 ['web_provider','web_endpoint','web_api_key'].forEach(name=>$('#settings-form').querySelector(`[name=${name}]`).addEventListener('input',describeSearchConfig));
+
+$('#parallel-sessions').addEventListener('change',async event=>{
+  const input=event.target,value=Number(input.value),note=$('#parallel-settings-note');
+  if(!Number.isInteger(value)||value<1){note.textContent='请输入正整数';return;}
+  input.disabled=true;try{await api('/api/execution',{max_parallel_sessions:value});note.textContent='已保存；降低上限时正在运行的研究会继续完成。';await refresh(true);}catch(error){note.textContent=error.message;}finally{input.disabled=false;}
+});

@@ -1,3 +1,5 @@
+let researchSubmitting=false;
+const sessionActionIds=new Set();
 /* Open research questions, evidence and invocation history. */
 statuses.incomplete='证据不足 / 未完成';
 const previousTop=renderTop, previousMetrics=renderMetrics, previousRun=renderRun;
@@ -6,7 +8,7 @@ renderTop=function(){
   previousTop();
   $('#dataset-summary').textContent=`${state.research_tools?.length||0} 项研究工具 · 当前会话 ${run?.assets?.length||0} 份材料`;
   if(page==='data')$('#page-label').textContent='材料与工具';
-  $('#draft-brief').disabled=!!state.active_run;
+  $('#draft-brief').disabled=researchSubmitting;
   const modelSelect=$('#research-model');
   const cloud=state.settings?.cloud||{};
   if(modelStatus?.models?.length||(cloud.enabled&&cloud.model)){
@@ -84,7 +86,7 @@ async function assetPayload(file){
 }
 async function startGeneralResearch(){
   const question=$('#brief-input').value.trim();if(question.length<8){toast('请先描述一个具体研究问题。');return;}
-  const button=$('#draft-brief');button.disabled=true;
+  if(researchSubmitting)return;researchSubmitting=true;const button=$('#draft-brief');button.disabled=true;
   try{
     if(pendingFiles.length>8)throw new Error('最多8份材料');
     const assets=[];for(const file of pendingFiles)assets.push(await assetPayload(file));
@@ -98,7 +100,7 @@ async function startGeneralResearch(){
     const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,roles:state.settings?.roles||{},budget_enabled:budgetOn,token_limit:budgetOn?Math.round(tokensK*1000):null,seconds_limit:budgetOn&&secondsRaw?Number(secondsRaw):null,max_steps:budgetOn&&stepsRaw?Number(stepsRaw):null});
     pendingFiles=[];renderAssetChips();
     await selectRun(created.id);toast('研究已启动；材料已随本次运行保存。');
-  }catch(error){toast(error.message);}finally{button.disabled=!!state?.active_run;}
+  }catch(error){toast(error.message);}finally{researchSubmitting=false;button.disabled=false;}
 }
 $('#attach-button').addEventListener('click',()=>$('#research-files').click());
 $('#research-files').addEventListener('change',()=>{
@@ -153,11 +155,11 @@ function renderSessionLayout(value){
   $('#session-report').href=`/api/runs/${value.id}/report`;$('#session-export').href=`/api/runs/${value.id}/export`;
   const pending=['running','queued','pausing'].includes(value.status);$('#session-report').classList.toggle('hidden',pending||value.domain!=='research');$('#session-archive').disabled=pending;
   const isResearch=value.domain==='research',paused=value.status==='paused';
-  $('#session-pause').classList.toggle('hidden',!isResearch||!pending);$('#session-pause').disabled=value.status==='pausing';$('#session-pause').textContent=value.status==='pausing'?'正在暂停…':'暂停研究';
-  $('#session-resume').classList.toggle('hidden',!isResearch||!paused);$('#session-resume').disabled=!!state?.active_run;
-  $('#followup-send').disabled=pending||paused||!!state?.active_run;
-  const note=$('#session-control-note');note.classList.toggle('hidden',!paused&&value.status!=='pausing'&&!value.lineage);
-  note.textContent=value.status==='pausing'?'正在等待当前调用结束。完成后保存结果与实际用量，再暂停。':paused?'研究已暂停。继续时沿用当前轮次和剩余预算，暂停期间不计研究用时。':value.lineage?`从 ${value.lineage.run_id} 的 ${value.lineage.node_id} 创建的分支${value.lineage.precision==='legacy_context'?' · 历史记录上下文，重新规划':' · 已恢复该调用结束时的状态'}`:'';
+  $('#session-pause').classList.toggle('hidden',!isResearch||!pending);$('#session-pause').disabled=value.status==='pausing';$('#session-pause').textContent=value.status==='pausing'?'正在暂停…':value.status==='queued'?'暂停排队':'暂停研究';
+  $('#session-resume').classList.toggle('hidden',!isResearch||!paused);$('#session-resume').disabled=sessionActionIds.has(value.id);
+  $('#followup-send').disabled=pending||paused||sessionActionIds.has(value.id);
+  const note=$('#session-control-note');note.classList.toggle('hidden',!paused&&value.status!=='pausing'&&value.status!=='queued'&&!value.lineage);
+  note.textContent=value.status==='queued'?'排队等待运行名额，等待期间不计研究时间预算。':value.status==='pausing'?'正在等待当前调用结束。完成后保存结果与实际用量，再暂停。':paused?'研究已暂停。继续时沿用当前轮次和剩余预算，暂停期间不计研究用时。':value.lineage?`从 ${value.lineage.run_id} 的 ${value.lineage.node_id} 创建的分支${value.lineage.precision==='legacy_context'?' · 历史记录上下文，重新规划':' · 已恢复该调用结束时的状态'}`:'';
   $('#session-step-count').textContent=value.trace?.length||(value.steps?.length||0)+(value.calls?.length||0);
   if(isResearch)$('#experiments').innerHTML='';
 }
@@ -247,7 +249,7 @@ function renderSessionTurns(run){
   const historyOpen=box.querySelector('.session-turn-history')?.open;box._turnStamp=stamp;
   const card=(turn,index)=>{
     const status=statuses[turn.status]||turn.status||'',question=index>0||turn.question!==run.question;
-    return `<article class="turn-block">${question?`<div class="turn-question"><span class="turn-role">追问</span><p>${esc(turn.question||'')}</p></div>`:''}<div class="turn-answer"><div class="turn-answer-heading"><strong>${index===turns.length-1?'研究结果':'历史结果'}</strong><span>第 ${index+1} 轮</span><span class="pill subtle">${esc(status)}</span></div><p class="${turn.conclusion?'':'muted'}">${esc(turn.conclusion||(['running','queued'].includes(turn.status)?'研究正在进行，执行记录中会显示最新步骤。':'本轮尚未形成结论。'))}</p></div></article>`;
+    return `<article class="turn-block">${question?`<div class="turn-question"><span class="turn-role">追问</span><p>${esc(turn.question||'')}</p></div>`:''}<div class="turn-answer"><div class="turn-answer-heading"><strong>${index===turns.length-1?'研究结果':'历史结果'}</strong><span>第 ${index+1} 轮</span><span class="pill subtle">${esc(status)}</span></div><p class="${turn.conclusion?'':'muted'}">${esc(turn.conclusion||(turn.status==='queued'?'排队等待运行名额。':turn.status==='running'?'研究正在进行，执行记录中会显示最新步骤。':'本轮尚未形成结论。'))}</p></div></article>`;
   };
   box.innerHTML=(turns.length>1?`<details class="session-turn-history" ${historyOpen?'open':''}><summary>此前 ${turns.length-1} 轮对话</summary>${turns.slice(0,-1).map(card).join('')}</details>`:'')+card(turns.at(-1),turns.length-1);
 }
@@ -264,22 +266,21 @@ $('#followup-send')?.addEventListener('click',async()=>{
   const question=$('#followup-input').value.trim();
   if(!run){toast('先打开一个研究会话');return;}
   if(question.length<8){toast('追问至少 8 个字符');return;}
-  const button=$('#followup-send');button.disabled=true;
+  const actionId=run.id;sessionActionIds.add(actionId);const button=$('#followup-send');button.disabled=true;
   try{
-    await api(`/api/runs/${run.id}/continue`,{question});
+    await api(`/api/runs/${actionId}/continue`,{question});
     $('#followup-input').value='';
     toast('已在本会话中开始下一轮研究。');
     await refresh(true);
-  }catch(error){toast(error.message);}finally{button.disabled=false;}
+  }catch(error){toast(error.message);}finally{sessionActionIds.delete(actionId);button.disabled=false;}
 });
 
 Object.assign(statuses,{pausing:'正在暂停',paused:'已暂停',incomplete:'未完成',inconclusive:'证据不足',done:'阶段结束'});
 $('#chain-kind').addEventListener('change',event=>{chainView.kind=event.target.value;renderChain(run);});
 $('#session-pause').addEventListener('click',async()=>{try{await api(`/api/runs/${run.id}/pause`,{});toast('已请求暂停，等待当前调用结束。');await refresh(true);}catch(error){toast(error.message);}});
-$('#session-resume').addEventListener('click',async()=>{const button=$('#session-resume');button.disabled=true;try{await api(`/api/runs/${run.id}/resume`,{});toast('已继续当前研究。');await refresh(true);}catch(error){toast(error.message);}finally{button.disabled=!!state?.active_run;}});
+$('#session-resume').addEventListener('click',async()=>{const actionId=run.id,button=$('#session-resume');sessionActionIds.add(actionId);button.disabled=true;try{await api(`/api/runs/${actionId}/resume`,{});toast('已提交继续研究；运行名额用满时排队。');await refresh(true);}catch(error){toast(error.message);}finally{sessionActionIds.delete(actionId);button.disabled=false;}});
 let forkSelection=null;
 function openFork(node){forkSelection={runId:run.id,nodeId:node.id};$('#fork-question').value='';$('#fork-routing').checked=false;$('#fork-description').textContent=node.legacy?'该历史记录没有检查点。新分支只继承提交材料与截至此处的记录作为上下文，重新收集证据并规划研究。':'恢复到该调用结束时的检查点，后续结果不会带入分支。';$('#fork-dialog').showModal();}
 $('#fork-form').addEventListener('submit',async event=>{event.preventDefault();if(!forkSelection)return;const button=$('#fork-submit');button.disabled=true;try{
-  if(state.active_run){await api(`/api/runs/${state.active_run}/pause`,{});button.textContent='等待当前研究暂停…';let paused=false;for(let i=0;i<200;i++){await new Promise(resolve=>setTimeout(resolve,1000));const latest=await api('/api/state');if(!latest.active_run){paused=true;break;}}if(!paused)throw Error('当前调用尚未结束，请稍后重试分支。');}
   const created=await api(`/api/runs/${forkSelection.runId}/fork`,{node_id:forkSelection.nodeId,question:$('#fork-question').value,routing:$('#fork-routing').checked?(state.settings.routing||{}):undefined});$('#fork-dialog').close();await refresh(true);await selectRun(created.id);toast('已创建分支并继续研究。');
 }catch(error){toast(error.message);}finally{button.disabled=false;button.textContent='创建分支并继续';}});

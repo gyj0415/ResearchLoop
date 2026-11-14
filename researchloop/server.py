@@ -24,14 +24,15 @@ from . import cloudllm
 from . import db
 from . import webaccess
 from . import memory
+from .sessions import SessionManager
 
 SERVICE = SimpleNamespace(active=None, preparing=None)
-RESEARCH_ENGINE = None
+SESSIONS = SessionManager()
 WEB = ROOT / "web"
 
 
 def summary(run):
-    keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "archived", "archived_at", "budget_enabled", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
+    keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "archived", "archived_at", "updated_at", "queue_wait_seconds", "budget_enabled", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
     result = {k: run.get(k) for k in keys}
     result["domain"] = run.get("domain", "unknown")
     if run.get("domain") == "research":
@@ -50,19 +51,12 @@ def summary(run):
     return result
 
 
+def busy(run_id=None):
+    return (SERVICE.active == run_id if run_id else bool(SERVICE.active)) or SESSIONS.busy(run_id)
+
+
 def launch_research(engine):
-    """Caller holds LOCK, reserving the one active research slot atomically."""
-    global RESEARCH_ENGINE
-    RESEARCH_ENGINE = engine
-    SERVICE.active = engine.run["id"]
-    def work():
-        try:
-            engine.execute()
-        finally:
-            with LOCK:
-                if RESEARCH_ENGINE is engine:
-                    SERVICE.active = None
-    threading.Thread(target=work, daemon=True).start()
+    SESSIONS.submit(engine)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,7 +85,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urllib.parse.urlparse(self.path).path
             if path == "/api/state":
-                return self.send(200, {"active_run": SERVICE.active, "runs": [summary(r) for r in list_runs()],
+                execution = SESSIONS.snapshot()
+                if SERVICE.active:
+                    execution["active_runs"].append(SERVICE.active)
+                    execution["running_runs"].append(SERVICE.active)
+                active = execution["running_runs"] or execution["queued_runs"]
+                return self.send(200, {"active_run": active[0] if active else None, **execution, "runs": [summary(r) for r in list_runs()],
                     "settings": masked_settings(), "version": __version__, "research_tools": RESEARCH_TOOLS,
                     "research_memory": research_core.memory_state(), "memory_system": memory.state()})
             if path == "/api/research/tools":
@@ -140,7 +139,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send(500, {"error": str(exc)})
 
     def do_POST(self):
-        global RESEARCH_ENGINE
         request_id = uuid.uuid4().hex
         request_started = time.perf_counter()
         try:
@@ -159,16 +157,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, memory.add(body))
             if path == "/api/memory/toggle":
                 return self.send(200, memory.toggle(body.get("id"), bool(body.get("enabled"))))
+            if path == "/api/execution":
+                parallel = body.get("max_parallel_sessions")
+                if not isinstance(parallel, int) or isinstance(parallel, bool) or parallel < 1:
+                    raise ValueError("并行研究数需要为正整数")
+                with LOCK:
+                    value = settings()
+                    value["execution"] = {"max_parallel_sessions": parallel}
+                    write_json(ROOT / "config.json", value)
+                    execution = SESSIONS.reconfigure()
+                return self.send(200, execution)
             if path == "/api/research":
                 with LOCK:
-                    if SERVICE.active or SERVICE.preparing:
-                        raise ValueError("已有任务正在运行")
+                    if SERVICE.active:
+                        raise ValueError("旧版算子任务正在运行，请等待结束")
                     engine = research_core.create(body)
                     launch_research(engine)
                 return self.send(202, summary(engine.run))
             if path == "/api/research/memory/activate":
-                if SERVICE.active:
-                    raise ValueError("运行中不能切换经验")
+                if busy():
+                    raise ValueError("请先暂停运行或排队的研究，再切换方法版本")
                 return self.send(200, research_core.activate(body["version"]))
             if path == "/api/web/test":
                 config = settings()["web"]
@@ -188,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("请先填写云端服务地址")
                 return self.send(200, cloudllm.probe(base_url, api_key))
             if path == "/api/settings":
-                if SERVICE.active:
+                if busy():
                     raise ValueError("研究运行期间不能修改模型设置")
                 url = str(body.get("ollama_url", "http://127.0.0.1:11434")).rstrip("/")
                 parsed = urllib.parse.urlparse(url)
@@ -276,7 +284,8 @@ class Handler(BaseHTTPRequestHandler):
                     webaccess.validate_search_config(web_value["search_provider"], web_value["search_endpoint"])
                 value = {"revision": uuid.uuid4().hex, "ollama_url": url, "model": model, "model_source": source, "cloud": value_cloud,
                          "roles": cleaned_roles, "web": web_value, "budgets": budgets,
-                         "routing": research_core.routing.clean(body.get("routing") or settings().get("routing"))}
+                         "routing": research_core.routing.clean(body.get("routing") or settings().get("routing")),
+                         "execution": settings()["execution"]}
                 write_json(ROOT / "config.json", value)
                 return self.send(200, masked_settings())
             if path == "/api/tasks":
@@ -293,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/runs":
                 if operator_service.is_operator_task(str(body.get("task"))):
                     with LOCK:
-                        if SERVICE.active or (SERVICE.preparing and SERVICE.preparing.get("status") == "running"):
+                        if busy():
                             raise ValueError("已有任务正在运行")
                         run, run_dir = operator_service.begin(
                             str(body.get("task")),
@@ -314,22 +323,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(202, summary(run))
                 raise ValueError("旧版检索示例已移除；请通过 /api/research 提交研究问题")
             if path.startswith("/api/runs/") and path.endswith("/pause"):
-                with LOCK:
-                    if not RESEARCH_ENGINE or SERVICE.active != path.split("/")[3] or RESEARCH_ENGINE.run["id"] != SERVICE.active:
-                        raise ValueError("该研究不在运行中")
-                    RESEARCH_ENGINE.pause_requested.set()
-                    RESEARCH_ENGINE.run["status"] = "pausing"
-                    RESEARCH_ENGINE.save()
-                return self.send(202, {"requested": True, "message": "当前调用结束后暂停，保存实际用量与检查点"})
+                return self.send(202, SESSIONS.pause(path.split("/")[3]))
             if path.startswith("/api/runs/") and path.endswith(("/resume", "/fork")):
                 with LOCK:
-                    if SERVICE.active or SERVICE.preparing:
-                        raise ValueError("已有任务正在运行，请先暂停")
+                    if SERVICE.active:
+                        raise ValueError("旧版算子任务正在运行")
                     run_id = path.split("/")[3]
                     existing = read_json(run_path(run_id))
                     folder = RUNS / run_id
                     if existing.get("domain") != "research":
                         raise ValueError("仅支持研究会话")
+                    if not path.endswith("/fork"):
+                        SESSIONS.assert_idle(run_id)
                     if path.endswith("/fork"):
                         existing, folder = research_core.history.fork(existing, folder, str(body.get("node_id") or ""), body.get("question"))
                     if isinstance(body.get("routing"), dict):
@@ -340,8 +345,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/runs/") and path.endswith("/continue"):
                 run_id = path.split("/")[3]
                 with LOCK:
-                    if SERVICE.active or SERVICE.preparing:
-                        raise ValueError("已有任务正在运行")
+                    if SERVICE.active:
+                        raise ValueError("旧版算子任务正在运行")
+                    SESSIONS.assert_idle(run_id)
                     existing = read_json(run_path(run_id))
                     if existing.get("domain") != "research":
                         raise ValueError("只有研究会话可以继续追问")
@@ -355,8 +361,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(202, summary(engine.run))
             if path.startswith("/api/runs/") and path.endswith("/archive"):
                 run_id = path.split("/")[3]
-                if SERVICE.active == run_id or (RESEARCH_ENGINE and RESEARCH_ENGINE.run["id"] == run_id
-                                                 and RESEARCH_ENGINE.run["status"] in ("running", "queued")):
+                if busy(run_id):
                     raise ValueError("运行中不能归档")
                 archived = bool(body.get("archived", True))
                 run = archive_run(run_id, archived)
@@ -366,19 +371,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, summary(run))
             if path.startswith("/api/runs/") and path.endswith("/delete"):
                 run_id = path.split("/")[3]
-                if SERVICE.active == run_id:
-                    raise ValueError("运行中不能删除")
+                if busy(run_id):
+                    raise ValueError("运行或排队的研究不能删除")
                 result = delete_run(run_id)
                 activity.record("archive", "会话已移入回收目录", source="api", actor="user",
                                 run_id=run_id, status="completed", data=result)
                 return self.send(200, result)
             if path.startswith("/api/runs/") and path.endswith("/cancel"):
-                if RESEARCH_ENGINE and RESEARCH_ENGINE.run["id"] == path.split("/")[3] and SERVICE.active == RESEARCH_ENGINE.run["id"]:
-                    RESEARCH_ENGINE.cancelled.set()
-                    return self.send(200, {"requested": True, "message": "当前工具调用结束后停止"})
-                raise ValueError("该研究当前不在运行中")
+                return self.send(200, SESSIONS.cancel(path.split("/")[3]))
             if path == "/api/memory/promote":
-                if SERVICE.active:
+                if busy():
                     raise ValueError("请等待当前运行完成后发布经验")
                 candidate = read_json(run_path(body["run_id"]))
                 if candidate.get("domain") == "research":
@@ -403,7 +405,10 @@ def serve(host="127.0.0.1", port=8767):
     except Exception:
         pass
     for run in list_runs():
-        if run["status"] in ("queued", "running", "pausing"):
+        if run["status"] == "queued":
+            run.update(status="paused", restore_budget=True, stop_reason="服务重启，排队研究已暂停，未启动新调用")
+            write_json(run_path(run["id"]), run)
+        elif run["status"] in ("running", "pausing"):
             run["status"] = "interrupted"
             run["stop_reason"] = "服务重启，保留此前已写入的实验记录；未继续调用模型"
             write_json(run_path(run["id"]), run)

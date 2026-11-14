@@ -14,6 +14,7 @@ class Budget:
         self.token_limit = token_limit
         self.seconds_limit = seconds_limit
         self.started = time.monotonic()
+        self._frozen_elapsed = None
         self.input_tokens = 0
         self.output_tokens = 0
         self.unknown_reserved = 0
@@ -38,7 +39,15 @@ class Budget:
 
     @property
     def elapsed(self):
-        return time.monotonic() - self.started
+        return self._frozen_elapsed if self._frozen_elapsed is not None else time.monotonic() - self.started
+
+    def suspend(self):
+        self._frozen_elapsed = self.elapsed
+
+    def resume_clock(self):
+        elapsed = self.elapsed
+        self.started = time.monotonic() - elapsed
+        self._frozen_elapsed = None
 
     @property
     def token_cap(self):

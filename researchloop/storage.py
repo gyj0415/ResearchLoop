@@ -73,6 +73,11 @@ def settings():
     value["cloud"] = cloud
     value["web"] = web
     value["budgets"] = budgets
+    execution = saved.get("execution") or {}
+    parallel = execution.get("max_parallel_sessions", 3)
+    if not isinstance(parallel, int) or isinstance(parallel, bool) or parallel < 1:
+        parallel = 3
+    value["execution"] = {"max_parallel_sessions": parallel}
     return value
 
 

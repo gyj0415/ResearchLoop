@@ -3,6 +3,7 @@ import hashlib
 import json
 import base64
 import copy
+import functools
 import math
 import re
 import secrets
@@ -93,12 +94,22 @@ ARGUMENTS = {
 }
 
 
+def _memory_locked(function):
+    @functools.wraps(function)
+    def call(*args, **kwargs):
+        with storage.LOCK:
+            return function(*args, **kwargs)
+    return call
+
+
+@_memory_locked
 def memory_state():
     root = storage.MEMORY / "research"
     versions = sorted([storage.read_json(p) for p in root.glob("v*.json")], key=lambda v: v["version"])
     return {"active": storage.read_json(root / "active.json", {"version": 0})["version"], "versions": versions}
 
 
+@_memory_locked
 def activate(version):
     version = int(version)
     if version and not (storage.MEMORY / "research" / f"v{version}.json").exists():
@@ -107,6 +118,7 @@ def activate(version):
     return memory_state()
 
 
+@_memory_locked
 def publish(run):
     if run.get("domain") != "research" or run["status"] != "completed" or not run.get("report", {}).get("lesson"):
         raise ValueError("需要完成复核并形成经验的研究")

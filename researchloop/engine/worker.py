@@ -8,8 +8,6 @@ import statistics
 import sys
 from pathlib import Path
 
-import numpy as np
-
 ALLOWED_IMPORTS = {"numpy", "math", "statistics"}
 BANNED = {"open", "exec", "eval", "compile", "globals", "locals", "getattr", "setattr", "delattr", "vars", "dir", "input", "breakpoint", "help", "exit", "quit", "memoryview", "__import__"}
 BANNED_ATTRIBUTES = {"load", "save", "savez", "savez_compressed", "loadtxt", "savetxt", "genfromtxt", "fromfile", "tofile", "memmap", "ctypes", "ctypeslib", "f2py", "lib", "random", "testing"}
@@ -38,6 +36,7 @@ def validate(code):
 
 
 def execute(payload):
+    import numpy as np
     tree = validate(payload["code"])
     assets = payload.get("assets", {})
     captured = []

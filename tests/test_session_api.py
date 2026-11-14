@@ -9,13 +9,14 @@ from pathlib import Path
 from unittest.mock import patch
 from researchloop import storage, server
 from researchloop.engine import core
+from researchloop.sessions import SessionManager
 
 
 class SessionAPITests(unittest.TestCase):
     def test_pause_resume_and_fork_use_same_http_contract_as_ui(self):
         with tempfile.TemporaryDirectory(dir=storage.ROOT / '.cache') as temp:
             root = Path(temp)
-            with patch.object(storage, 'RUNS', root/'runs'), patch.object(server, 'RUNS', root/'runs'), patch.object(storage, 'MEMORY', root/'memory'), patch.object(server, 'RESEARCH_ENGINE', None), patch.object(server.SERVICE, 'active', None):
+            with patch.object(storage, 'RUNS', root/'runs'), patch.object(server, 'RUNS', root/'runs'), patch.object(storage, 'MEMORY', root/'memory'), patch.object(server, 'SESSIONS', SessionManager()), patch.object(server.SERVICE, 'active', None):
                 api = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
                 worker = threading.Thread(target=api.serve_forever, daemon=True)
                 worker.start()
@@ -38,7 +39,7 @@ class SessionAPITests(unittest.TestCase):
                         return json.load(response)
                 def idle():
                     for _ in range(300):
-                        if not server.SERVICE.active:
+                        if not server.SESSIONS.busy():
                             return
                         time.sleep(.01)
                     self.fail('Research worker did not release active slot')

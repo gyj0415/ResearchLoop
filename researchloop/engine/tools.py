@@ -73,7 +73,7 @@ def literature(query, timeout=15):
 
 
 def inspect_assets(run, folder):
-    import numpy
+    from importlib.metadata import version
     from researchloop import documents
     rows = []
     for asset in run["assets"]:
@@ -93,7 +93,7 @@ def inspect_assets(run, folder):
         else:
             item["preview"] = path.read_text(encoding="utf-8-sig")[:1800]
         rows.append(item)
-    return {"assets": rows, "python": sys.version.split()[0], "numpy": numpy.__version__,
+    return {"assets": rows, "python": sys.version.split()[0], "numpy": version("numpy"),
             "capabilities": "文献元数据检索、文本/CSV读取、PDF/DOCX/PPTX文档提取、NumPy数值实验、固定判据的独立随机重跑。没有真实数据时只能研究明确声明的模拟情景。"}
 
 
@@ -109,6 +109,10 @@ def experiment(code, run, folder, experiment_id, phase, timeout, seed):
     started = time.perf_counter()
     environment = {key: value for key, value in os.environ.items() if key.upper() in ("SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP")}
     environment["PYTHONIOENCODING"] = "utf-8"
+    # Each experiment is already an isolated worker. Avoid every parallel
+    # session creating a machine-wide BLAS thread pool of its own.
+    for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        environment[name] = "1"
     worker = folder / "source" / "researchloop" / "engine" / "worker.py"
     if not worker.exists():
         worker = Path(__file__).with_name("worker.py")
