@@ -42,14 +42,14 @@ ROLES = {
     "reporter": {
         "label": "报告",
         "goal": "根据真实探索与复核结果形成结论、局限与方法经验",
-        "tools": ["reflect", "remember_fact", "finish"],
+        "tools": ["reflect", "finish"],
         "system": "你是报告撰写者。按摘要、问题背景、研究方法、结果、讨论局限与结论组织连贯正文，在finish.manuscript提交。只依据真实证据形成结论，定量结论需复核。计划或记忆中的说法不是已知事实。没有证据时用空citations报告未完成，不把猜测写成事实记忆；检索失败与引用错误要明确说明。",
     },
 }
 
-DEFAULT_ORDER = ["planner", "experimenter", "verifier", "reporter"]
+DEFAULT_ORDER = ["planner", "generalist", "reporter"]
 
-for _role in ('planner','analyst','generalist','experimenter','verifier','reporter'):
+for _role in ('planner','analyst','generalist','experimenter','verifier'):
     ROLES[_role]['tools'] += ['list_files','read_file','select_model','read_subagents']
 for _role in ('experimenter','generalist'):
     ROLES[_role]['tools'] += ['write_file','run_command','command_experiment']

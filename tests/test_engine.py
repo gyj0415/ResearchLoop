@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from researchloop import storage
-from researchloop.engine import core
+from researchloop.engine import core, workflow
 from researchloop.engine.worker import validate
 
 
@@ -253,6 +253,75 @@ class ResearchEngineTests(unittest.TestCase):
         self.assertEqual(result["status"], "inconclusive")
         self.assertIn("未完成", result["report"]["conclusion"])
         self.assertTrue((engine.folder / "report.md").exists())
+
+    def test_web_evidence_reaches_reporter_without_a_numeric_plan(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        engine.run["workflow"] = {"source": "fixture", "stages": workflow.validate([
+            {"role": "planner", "goal": "读取网页证据", "why": "核实原文", "max_steps": 1},
+            {"role": "reporter", "goal": "引用网页并写报告", "why": "形成结论", "max_steps": 1},
+        ])}
+        seen = []
+
+        def decide():
+            choices = engine.available_tools()
+            seen.append((engine.run["active_agent"]["role"], choices))
+            if engine.run["active_agent"]["role"] == "planner":
+                return {"tool": "web_fetch", "args": {"url": "https://example.org/subject"}}
+            return {"tool": "finish", "args": {
+                "conclusion": "测试网页正文仅支持有限的定性判断。", "citations": ["p1"], "lesson": ""}}
+
+        engine.decide = decide
+        base = storage.settings()
+        web = {**base["web"], "enabled": True}
+        page = {"url": "https://example.org/subject", "title": "测试网页",
+                "content": "测试正文说明两个名称之间的关系。", "fetched_at": "fixture", "truncated": False}
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}), \
+                patch("researchloop.webaccess.fetch", return_value=page):
+            run = engine.execute()
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual([step["tool"] for step in run["steps"]], ["web_fetch", "finish"])
+        self.assertEqual(seen[-1], ("reporter", ["finish"]))
+        self.assertEqual(run["report"]["citations"], ["p1"])
+        self.assertIn("测试正文", run["steps"][0]["observation"]["content"])
+        self.assertIn("[p1]", (engine.folder / "report.md").read_text(encoding="utf-8"))
+
+    def test_fact_memory_waits_for_cited_completed_report(self):
+        engine = self.engine()
+        engine.run["research_kind"] = "qualitative"
+        engine.run["sources"] = [{"id": "p1", "title": "测试正文", "evidence_scope": "网页正文",
+                                  "abstract": "测试事实", "url": "https://example.org/a"}]
+        args = {"predicate": "测试关系", "object": "有限事实", "summary": "仅由测试正文支持",
+                "evidence_ids": ["p1"]}
+        with patch("researchloop.engine.extratools.facts.remember") as remember:
+            pending = engine.apply("remember_fact", args)
+            self.assertEqual(pending["status"], "pending_report")
+            remember.assert_not_called()
+            engine.apply("finish", {"conclusion": "测试正文支持这一有限事实。", "citations": ["p1"], "lesson": ""})
+            remember.assert_called_once()
+
+        other = self.engine()
+        other.run["research_kind"] = "qualitative"
+        other.run["sources"] = engine.run["sources"].copy()
+        with patch("researchloop.engine.extratools.facts.remember") as remember:
+            other.apply("remember_fact", args)
+            other.apply("finish", {"conclusion": "报告没有引用该测试事实。", "citations": [], "lesson": ""})
+            remember.assert_not_called()
+
+    def test_unfinished_research_does_not_publish_pending_fact_or_report_tool_error_as_conclusion(self):
+        engine = self.engine(max_steps=1)
+        engine.run["sources"] = [{"id": "p1", "title": "测试来源", "url": "https://example.org/a",
+                                  "abstract": "测试内容", "evidence_scope": "网页正文"}]
+        engine.apply("remember_fact", {"predicate": "测试事实", "object": "候选说法",
+                                        "summary": "尚未进入完成报告", "evidence_ids": ["p1"]})
+        engine.decide = lambda: {"tool": "read_file", "args": {"path": "example.org/missing"}}
+        with patch("researchloop.engine.extratools.facts.remember") as remember:
+            run = engine.execute()
+            remember.assert_not_called()
+        self.assertEqual(run["status"], "inconclusive")
+        self.assertEqual(run["pending_facts"][0]["status"], "not_published")
+        self.assertIn("已收集 1 条来源", run["report"]["conclusion"])
+        self.assertNotIn("example.org/missing", run["report"]["conclusion"])
+        self.assertIn("missing", str(run["report"]["recovery"]["execution_errors"]))
 
     def test_metric_must_be_a_short_identifier(self):
         engine = self.engine()

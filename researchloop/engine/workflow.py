@@ -39,12 +39,10 @@ ROLE_ALIASES = {"规划": "planner", "计划": "planner", "实验": "experimente
 
 def default_stages():
     return [
-        {"role": "planner", "goal": "检查材料与文献，确认可行性并注册可证伪假设", "max_steps": 4,
-         "why": "先确认证据与数据是否足以回答，避免在缺数据时用模拟或计数替代真实研究"},
-        {"role": "experimenter", "goal": "为已注册假设运行真实实验并登记测量", "max_steps": 4,
-         "why": "假设必须用可执行实验与真实测量检验，而不是由文本推断"},
-        {"role": "verifier", "goal": "用新的隐藏种子独立复核冻结代码", "max_steps": 2,
-         "why": "独立重跑能暴露偶然结果，复核不通过是有效负结果"},
+        {"role": "planner", "goal": "检查材料与文献，确认问题所需证据及研究方法", "max_steps": 4,
+         "why": "先确认证据与数据是否足以回答，避免以模拟替代真实材料"},
+        {"role": "generalist", "goal": "根据问题继续取证；需要实验时注册假设、执行并复核", "max_steps": 6,
+         "why": "定性问题核查来源，定量问题检验预注册判据"},
         {"role": "reporter", "goal": "依据复核结果形成结论、局限与方法经验", "max_steps": 2,
          "why": "只报告复核过的证据，并写清证据缺口与适用边界"},
     ]
@@ -74,7 +72,7 @@ def validate(stages):
         steps = int(steps) if isinstance(steps, int) else 3
         tools = stage.get("tools")
         selected = None
-        if tools is not None:
+        if tools:
             if not isinstance(tools, list) or any(not isinstance(item, str) for item in tools):
                 raise ValueError(f"第{index + 1}阶段 tools 必须是工具名数组")
             ceiling = set(roles.tools_for(role))
@@ -85,6 +83,10 @@ def validate(stages):
             if not chosen:
                 raise ValueError(f"第{index + 1}阶段 tools 不能为空")
             selected = chosen
+        elif tools is not None and tools != []:
+            raise ValueError(f"第{index + 1}阶段 tools 必须是工具名数组")
+        if role == "reporter" and selected and "finish" not in selected:
+            raise ValueError("报告阶段必须包含 finish 工具")
         cleaned.append({"role": role, "label": label or roles.ROLES[role]["label"],
                         "goal": goal, "max_steps": max(1, min(MAX_STAGE_STEPS, steps)),
                         "tools": selected,
@@ -137,7 +139,9 @@ def plan(engine):
                              "每个阶段给出role、goal、max_steps；可以为阶段取自定义名称（role填自定义名，会作为通用阶段执行），"
                              "也可以用 tools 限定该阶段只使用哪些工具。定性/文献问题可以没有实验；需要数值实验时应有experimenter，复核与报告在实验之后。"
                              "每个阶段必须写 why：为什么需要、解决什么、为什么这个顺序。可用 model_tier 选择已配置的 light/strong，auto 沿用默认路由。"
-                             "独立取证/分析任务可放进相邻同名 parallel_group（每组最多3个），实际由独立子Agent并行；有依赖的实验/复核及最终汇总放在之后。"
+                             "tools 是可选的角色工具子集；留空数组表示不限制。报告阶段须使用 reporter 且保留 finish，不能用 inspect。"
+                             "独立取证/分析任务可放进相邻同名 parallel_group（每组最多3个），实际由独立子Agent并行；指定 tools 的阶段和报告阶段不能加入并行组。"
+                             "有依赖的实验/复核及最终汇总放在之后。"
                              "阶段目标不能预设未核实的结论；不要编造材料中没有的数据。"}
     attempts = []
     stages = None
@@ -169,7 +173,7 @@ def plan(engine):
     if stages is None:
         stages = default_stages()
         source = "default"
-        reason = "模型工作流两次不可用，使用默认四阶段：" + "；".join(attempts)
+        reason = "模型工作流两次不可用，使用通用三阶段：" + "；".join(attempts)
     workflow = {"source": source, "reason": reason, "stages": stages,
                 "attempts": attempts, "planned_at": run.get("updated_at")}
     run["workflow"] = workflow

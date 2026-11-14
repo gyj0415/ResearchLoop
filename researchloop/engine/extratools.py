@@ -47,12 +47,13 @@ def web_fetch(engine, args):
     if len(page["content"]) < 200:
         note = "正文很短：页面可能需要登录或由脚本渲染，未获取到主要内容"
     entry = {"id": f"p{len(engine.run['sources']) + 1}", "title": page["title"], "url": page["url"],
-             "abstract": page["content"][:1800], "evidence_scope": "网页正文",
+             "abstract": page["content"][:1800], "content": page["content"], "evidence_scope": "网页正文",
              "fetched_at": page["fetched_at"], "content_chars": len(page["content"])}
     engine.run["sources"].append(entry)
     engine.run["evidence_collected"] = True
     return {"id": entry["id"], "url": page["url"], "title": page["title"],
-            "chars": len(page["content"]), "truncated": page["truncated"], "note": note}
+            "content": page["content"], "chars": len(page["content"]),
+            "truncated": page["truncated"], "note": note}
 
 
 def remember_fact(engine, args):
@@ -60,12 +61,34 @@ def remember_fact(engine, args):
     allowed = set(engine.memory_evidence_ids())
     if not isinstance(ids, list) or not ids or any(identifier not in allowed for identifier in ids):
         raise ValueError("研究事实记忆必须绑定已有材料、来源或已复核实验的 evidence_ids；未核实判断不能写成事实。偏好可在记忆页面添加。")
-    fact = facts.remember(engine.run["id"], str(args.get("predicate") or ""), str(args.get("object") or ""),
-                          str(args.get("summary") or ""), tags=args.get("tags"),
-                          confidence=args.get("confidence") or 0.6,
-                          source_message=str(args.get("source_message") or engine.run["question"]) + "\n证据ID：" + ", ".join(ids))
-    return {"id": fact["id"], "predicate": fact["predicate"], "object": fact["object"],
-            "summary": fact["summary"], "status": fact["status"]}
+    pending = {"predicate": str(args.get("predicate") or ""), "object": str(args.get("object") or ""),
+               "summary": str(args.get("summary") or ""), "tags": args.get("tags"),
+               "confidence": args.get("confidence") or 0.6, "evidence_ids": list(ids),
+               "source_message": str(args.get("source_message") or engine.run["question"]),
+               "status": "pending_report"}
+    engine.run.setdefault("pending_facts", []).append(pending)
+    return {"predicate": pending["predicate"], "object": pending["object"],
+            "summary": pending["summary"], "status": pending["status"],
+            "note": "报告完成并引用全部对应证据后才保存事实记忆。"}
+
+
+def commit_report_facts(engine, citations):
+    cited = set(citations)
+    for pending in engine.run.get("pending_facts", []):
+        if pending["status"] != "pending_report":
+            continue
+        if not set(pending["evidence_ids"]) <= cited:
+            pending["status"] = "not_cited"
+            continue
+        try:
+            fact = facts.remember(engine.run["id"], pending["predicate"], pending["object"],
+                                  pending["summary"], tags=pending["tags"],
+                                  confidence=pending["confidence"],
+                                  source_message=pending["source_message"] + "\n证据ID：" +
+                                  ", ".join(pending["evidence_ids"]))
+            pending.update(status="saved", id=fact["id"])
+        except Exception as error:
+            pending.update(status="save_failed", error=str(error))
 
 
 def get_memory_context(engine, args):
@@ -98,10 +121,10 @@ registry.register_tool("web_search", web_search,
                        description="搜索外部网页信息，适合最新消息、陌生实体或需要来源核实时使用。",
                        arguments={"query": "搜索关键词", "max_results": 5, "recency": "any"}, required=["query"])
 registry.register_tool("web_fetch", web_fetch,
-                       description="读取指定 http/https URL 的网页正文，用于确认搜索结果的原文。",
+                       description="读取指定 http/https URL 的网页正文，直接返回 content；网页不在本地 workspace，不能用 read_file 读取。",
                        arguments={"url": "要读取的 URL", "max_chars": 6000}, required=["url"])
 registry.register_tool("remember_fact", remember_fact,
-                       description="基于已有证据ID写入或确认研究事实记忆；必须附evidence_ids，不能将推测或检索失败后的判断写成事实。",
+                       description="基于已有证据ID暂存事实候选；完成报告引用全部证据后才写入记忆。必须附evidence_ids，不能把推测写成事实。",
                        arguments={"predicate": "事实谓词", "object": "事实对象", "summary": "简短摘要",
                                   "tags": ["标签"], "confidence": 0.6, "evidence_ids": ["p1"]}, required=["predicate", "object", "summary", "evidence_ids"])
 registry.register_tool("get_memory_context", get_memory_context,

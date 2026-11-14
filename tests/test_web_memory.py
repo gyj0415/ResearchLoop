@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from researchloop import facts, storage, webaccess
-from researchloop.engine import registry, roles, workflow
+from researchloop.engine import core, registry, roles, workflow
 
 
 class WebSafetyTests(unittest.TestCase):
@@ -80,9 +80,9 @@ class RegistryTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_default_workflow_is_valid_and_includes_experiment(self):
+    def test_default_workflow_can_handle_qualitative_or_experimental_research(self):
         stages = workflow.validate(workflow.default_stages())
-        self.assertEqual([stage["role"] for stage in stages][1], "experimenter")
+        self.assertEqual([stage["role"] for stage in stages], ["planner", "generalist", "reporter"])
 
     def test_qualitative_workflow_without_experiment_is_allowed(self):
         stages = workflow.validate([{"role": "planner", "goal": "检索并评估证据"},
@@ -112,6 +112,12 @@ class WorkflowTests(unittest.TestCase):
         cleaned = workflow.validate([{"role": "analyst", "goal": "分析",
                                       "tools": ["literature", "web_search"]}])
         self.assertEqual(cleaned[0]["tools"], ["literature", "web_search"])
+
+    def test_empty_tool_list_means_no_restriction(self):
+        cleaned = workflow.validate([{"role": "reporter", "goal": "总结来源", "tools": []}])
+        self.assertIsNone(cleaned[0]["tools"])
+        with self.assertRaisesRegex(ValueError, "finish"):
+            workflow.validate([{"role": "reporter", "goal": "总结来源", "tools": ["reflect"]}])
 
 
 class SettingsMaskingTests(unittest.TestCase):

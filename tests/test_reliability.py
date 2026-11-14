@@ -208,7 +208,11 @@ class ReliabilityTests(unittest.TestCase):
             engine.apply('remember_fact',{'predicate':'classification','object':'unsupported','summary':'未核实的判断','evidence_ids':[]})
         self.assertEqual(db.facts(scope='research'), [])
         engine.run['sources'] = [{'id':'p1','title':'测试来源','evidence_scope':'网页正文'}]
-        engine.apply('remember_fact',{'predicate':'observation','object':'test','summary':'有来源的测试观察','evidence_ids':['p1']})
+        pending = engine.apply('remember_fact',{'predicate':'observation','object':'test','summary':'有来源的测试观察','evidence_ids':['p1']})
+        self.assertEqual(pending['status'], 'pending_report')
+        self.assertEqual(db.facts(scope='research'), [])
+        engine.run['research_kind'] = 'qualitative'
+        engine.apply('finish',{'conclusion':'测试网页正文支持有限的观察。','citations':['p1'],'lesson':''})
         self.assertIn('p1', db.facts(scope='research')[0]['source_message'])
 
     def test_cloud_auth_failure_falls_back_to_configured_local_with_honest_usage(self):
