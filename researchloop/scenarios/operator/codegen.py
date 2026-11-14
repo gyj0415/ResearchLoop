@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from . import ir
 from .ir import (
     Act, Const, Dim, External, Input, LayerNorm, Node, Reduce, ScalarOp,
-    Softmax, TensorOp, Unary, UnsupportedPattern, is_scalar,
+    Softmax, TensorOp, Unary, is_scalar,
 )
 from .rules import rank_of
 

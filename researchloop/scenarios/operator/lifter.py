@@ -16,7 +16,7 @@ import textwrap
 from typing import Any, Dict, List, Optional, Tuple
 
 from .ir import (
-    Act, Const, Dim, External, Input, LayerNorm, Node, Reduce, ScalarOp,
+    Act, Const, Dim, Input, LayerNorm, Node, Reduce, ScalarOp,
     Softmax, TensorOp, Unary, UnsupportedPattern, is_scalar,
 )
 

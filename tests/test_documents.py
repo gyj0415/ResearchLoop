@@ -1,7 +1,6 @@
 """Document extraction contracts: docx / pptx / pdf tools and upload validation."""
 import base64
 import io
-import json
 import tempfile
 import unittest
 import zipfile

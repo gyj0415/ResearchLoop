@@ -190,7 +190,7 @@ def fork(run, folder, node_id, question=""):
         state["replay_response"] = bool(state.get("pending_response") and not state.get("pending_decision"))
         # At a terminal report boundary open a new follow-up turn on the frozen state.
         if saved_terminal(state) or precision == "legacy_context":
-            state.update(agents=[], active_agent=None, workflow=None, plan=None)
+            state.update(agents=[], active_agent=None, workflow=None, plan=None, gap_fill=None, feasibility=None)
             state.pop("report", None)
             state.pop("pending_response", None)
             state.pop("pending_decision", None)

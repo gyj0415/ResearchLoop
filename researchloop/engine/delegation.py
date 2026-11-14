@@ -6,10 +6,9 @@ to the parent at each join. Each worker owns its state, trace and workspace.
 import copy
 import shutil
 import threading
-from pathlib import Path
 from researchloop import storage
 from researchloop.ollama import BudgetError
-from . import registry, roles, routing, history
+from . import registry, routing, history
 
 TASK_SCHEMA = {'type':'object','properties':{
     'goal':{'type':'string'},'role':{'type':'string','enum':['planner','analyst','generalist','experimenter','verifier']},

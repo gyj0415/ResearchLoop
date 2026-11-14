@@ -4,13 +4,19 @@ import builtins
 import csv
 import json
 import math
+import os
 import statistics
 import sys
 from pathlib import Path
 
 ALLOWED_IMPORTS = {"numpy", "math", "statistics"}
 BANNED = {"open", "exec", "eval", "compile", "globals", "locals", "getattr", "setattr", "delattr", "vars", "dir", "input", "breakpoint", "help", "exit", "quit", "memoryview", "__import__"}
-BANNED_ATTRIBUTES = {"load", "save", "savez", "savez_compressed", "loadtxt", "savetxt", "genfromtxt", "fromfile", "tofile", "memmap", "ctypes", "ctypeslib", "f2py", "lib", "random", "testing"}
+BANNED_ATTRIBUTES = {"load", "save", "savez", "savez_compressed", "loadtxt", "savetxt", "genfromtxt", "fromfile", "tofile", "memmap", "ctypes", "ctypeslib", "f2py", "lib", "random", "testing",
+                     "fromregex", "dump", "dumps", "DataSource", "sys", "os", "modules", "builtins", "importlib", "subprocess", "io", "pathlib", "shutil", "pickle", "socket"}
+BLOCKED_EVENTS = ("os.system", "os.exec", "os.posix_spawn", "os.spawn", "os.startfile", "os.fork", "os.kill",
+                  "subprocess.", "_winapi.", "socket.", "ctypes.", "winreg.", "os.remove", "os.unlink", "os.rename",
+                  "os.replace", "os.rmdir", "os.mkdir", "os.chmod", "os.symlink", "os.link", "os.truncate",
+                  "shutil.", "os.chdir", "urllib.", "http.", "webbrowser.")
 
 
 def validate(code):
@@ -68,15 +74,51 @@ def execute(payload):
     result = captured[-1] if captured else namespace.get("result")
     if not isinstance(result, dict) or not result.get("metrics"):
         raise ValueError('未返回结果；请调用emit_result({"metrics": {"指标": 数值}, "notes": "说明"})')
-    if any(not isinstance(v, (int, float, np.number)) or isinstance(v, bool) or not math.isfinite(float(v)) for v in result["metrics"].values()):
-        raise ValueError("metrics必须为有限数值，不接受NaN、布尔值或文字")
+    if any(not isinstance(v, (int, float, np.number)) or isinstance(v, (bool, complex, np.complexfloating))
+           or not math.isfinite(float(v)) for v in result["metrics"].values()):
+        raise ValueError("metrics必须为有限实数，不接受NaN、复数、布尔值或文字")
     result["metrics"] = {str(k): float(v) for k, v in result["metrics"].items()}
     return result
 
 
+def restrict(payload):
+    """Process-wide audit hook: once installed it cannot be removed by experiment code."""
+    import numpy  # noqa: F401  Import before the hook so its own module files load normally.
+    import numpy.fft, numpy.linalg, numpy.polynomial, numpy.random  # noqa: E401,F401
+    sys.dont_write_bytecode = True
+    readable = [Path(p).resolve() for p in {sys.prefix, sys.base_prefix, sys.exec_prefix, Path(__file__).parent}]
+    assets = {Path(p).resolve() for p in (payload.get("assets") or {}).values()}
+
+    def readable_path(raw):
+        try:
+            path = Path(raw).resolve()
+        except (TypeError, ValueError, OSError):
+            return False
+        return path in assets or any(path.is_relative_to(root) for root in readable)
+
+    def hook(event, args):
+        if event.startswith(BLOCKED_EVENTS):
+            raise PermissionError(f"实验进程不允许 {event}")
+        if event == "open":
+            path, mode, flags = (list(args) + [None, None, None])[:3]
+            if isinstance(path, int):
+                return
+            writes = (isinstance(mode, str) and any(c in mode for c in "wax+")) or \
+                     (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC))
+            if writes or not readable_path(path):
+                raise PermissionError("实验进程只能读取声明的材料，不能写文件或读取其他路径")
+
+    sys.addaudithook(hook)
+
+
+def run(payload):
+    restrict(payload)
+    return execute(payload)
+
+
 if __name__ == "__main__":
     try:
-        result = execute(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")))
+        result = run(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")))
         print("\nRESEARCH_RESULT=" + json.dumps(result, ensure_ascii=False, allow_nan=False))
     except Exception as error:
         print("\nRESEARCH_ERROR=" + type(error).__name__ + ": " + str(error))

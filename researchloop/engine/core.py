@@ -20,8 +20,8 @@ from researchloop.engine import registry
 from researchloop.engine import roles
 from researchloop.engine import workflow as workflow_module
 from researchloop.engine import extratools  # registers web_search/web_fetch/remember_fact/get_memory_context
-from researchloop.engine import doctools  # registers read_docx/read_pptx/read_pdf
-from researchloop import facts, memory, reliability, llmjson, reporting
+from researchloop.engine import doctools  # noqa: F401  registers read_docx/read_pptx/read_pdf
+from researchloop import memory, reliability, llmjson, reporting
 from researchloop.ollama import Budget, BudgetError
 from . import tools
 from . import protocol, routing, history
@@ -367,12 +367,27 @@ class ResearchEngine:
             self.event("gap_fill", f"已尝试 {fill['attempts']} 种不同取证，可以重新评估或收尾",
                        status="completed")
 
+    def add_source(self, row):
+        """Repeated hits of one DOI or URL keep their first evidence ID; they are not independent sources."""
+        def keys(item):
+            return {str(item.get(key) or "").strip().lower() for key in ("doi", "url")} - {""}
+        existing = next((source for source in self.run["sources"] if keys(row) & keys(source)), None)
+        if existing is None:
+            row["id"] = f"p{len(self.run['sources']) + 1}"
+            self.run["sources"].append(row)
+            return row
+        if row.get("abstract") and not existing.get("abstract"):
+            existing.update(abstract=row["abstract"], evidence_scope=row.get("evidence_scope") or existing.get("evidence_scope"))
+        row["id"] = existing["id"]
+        return row
+
     def evidence_ids(self):
         return sorted({row["id"] for group in ("assets", "sources", "hypotheses", "experiments")
                        for row in self.run.get(group, [])})
 
     def memory_evidence_ids(self):
-        return sorted({row["id"] for group in ("assets", "sources") for row in self.run.get(group, [])} |
+        sources = [row for row in self.run.get("sources", []) if "只有元数据" not in str(row.get("evidence_scope") or "")]
+        return sorted({row["id"] for row in [*self.run.get("assets", []), *sources]} |
                       {row["id"] for row in self.run.get("experiments", []) if row.get("verification")})
 
     def agent_step(self):
@@ -412,9 +427,12 @@ class ResearchEngine:
                                  "达到要求的尝试后才能重新 plan 或 finish；每次运行都要以报告结束。"
                                  "如果需要多阶段编排，先调用design_workflow并写明每个阶段的设计理由。"}
         if "design_workflow" in options:
+            prompt["role_tools"] = workflow_module.role_tools()
             prompt["instruction"] += ("规划阶段先判断问题需要的证据。定性、文献和概念比较只安排取证、分析、报告；"
                                       "只有明确可执行的数值问题、指标和假设时才安排实验与复核。"
-                                      "实验角色没有finish权限；缺少假设时先注册。无论取证是否成功，最后安排reporter总结结论或证据缺口。")
+                                      "实验角色没有finish权限；缺少假设时先注册。无论取证是否成功，最后安排reporter总结结论或证据缺口。"
+                                      "role_tools 列出各角色能用的工具，自定义阶段名按 generalist；stages[].tools 通常省略，"
+                                      "填写时只能取自该阶段角色的 role_tools，不能照抄你此刻的 allowed_tools。")
         if (run.get("active_agent") or {}).get("role") == "experimenter":
             prompt["instruction"] += ("当前是实验阶段，不能调用finish。若还没有假设，先调用hypothesis注册可检验的指标与阈值；"
                                       "再调用experiment实际运行。实验不可执行时保留原因，后续报告阶段再总结。")
@@ -570,12 +588,13 @@ class ResearchEngine:
             add("plan")
         else:
             add("hypothesis")
-            if run.get("hypotheses"):
-                add("experiment",'command_experiment')
-            if any(e.get("status") == "completed" and not e.get("verification") for e in run.get("experiments", [])):
-                add("verify")
-            if any(experiment.get("verification") for experiment in run.get("experiments", [])):
-                add("reflect")
+        # A follow-up turn clears the plan but keeps registered hypotheses and experiments.
+        if run.get("hypotheses"):
+            add("experiment",'command_experiment')
+        if any(e.get("status") == "completed" and not e.get("verification") for e in run.get("experiments", [])):
+            add("verify")
+        if any(experiment.get("verification") for experiment in run.get("experiments", [])):
+            add("reflect")
         if run.get("sources") or run.get("assets") or any(e.get("verification") for e in run.get("experiments", [])):
             add("remember_fact")
         if run.get("plan") or not (run.get("sources") or run.get("assets") or run.get("experiments")):
@@ -665,6 +684,7 @@ class ResearchEngine:
         return allowed
 
     def execute(self):
+        self.finishing = False
         self.run["status"] = "running"
         self.event("setup", "开始研究开放问题，按工具反馈决定下一步", question=self.run["question"])
         try:
@@ -680,6 +700,11 @@ class ResearchEngine:
         except Exception as error:
             self.run["status"], self.run["error"] = "failed", str(error)
         finally:
+            with storage.LOCK:
+                self.finishing = True
+                if self.run["status"] == "pausing":
+                    # The pause request arrived after the last pause check; keep the real outcome.
+                    self.run["status"] = getattr(self, "status_before_pause", "running")
             if self.run["status"] == "running":
                 self.run["status"] = "incomplete"
             if self.run["status"] == "paused":
@@ -807,7 +832,6 @@ class ResearchEngine:
             attempt, retry_of = next_retry["attempt"], next_retry["retry_of"]
 
     def _loop(self, limit, mark_incomplete=True):
-        allowed = self.allowed_tools()
         agent_id = (self.run.get("active_agent") or {}).get("id")
         experiment_stage = (self.run.get("active_agent") or {}).get("role") == "experimenter"
         extension_key = f"{self.turn_id}:{agent_id or 'react'}"
@@ -837,6 +861,13 @@ class ResearchEngine:
                     break
             if self.seconds_left() <= 0:
                 raise BudgetError("研究时间预算耗尽")
+            if (agent_id and not pending_retry and not self.run.get("pending_decision")
+                    and not self.available_tools()):
+                if not scoped:
+                    self.run["active_agent"]["status"] = "skipped"
+                self.event("stage", "当前阶段没有可用工具，不调用模型，转入后续阶段", status="skipped",
+                           level="warning", agent=agent_id)
+                break
             try:
                 retry = self.run.get("pending_tool_retry")
                 decision = retry["decision"] if retry else self.run.pop("pending_decision", None) or self.decide()
@@ -864,6 +895,7 @@ class ResearchEngine:
                     break
                 continue
             tool = decision.get("tool")
+            allowed = self.allowed_tools()
             if allowed is not None and tool not in allowed:
                 self.run.pop("pending_decision", None)
                 failed = {"id": f"s{len(self.run['steps'])+1}", "tool": tool, "status": "failed", "turn": self.turn_id,
@@ -971,9 +1003,7 @@ class ResearchEngine:
                     self.run.pop('pending_decision',None)
                 consumed.update(i for i,_ in peers)
                 continue
-            stage_tools = stage.get("tools")
-            if stage["role"] == "experimenter" and not self.run.get("hypotheses") and stage_tools:
-                stage_tools = list(dict.fromkeys([*stage_tools, "hypothesis"]))
+            stage_tools = workflow_module.stage_tools(stage["role"], stage.get("tools"))
             agent = activate(f"g{index + 1}", stage["role"], stage["goal"], stage.get("why", ""),
                              stage.get("label", ""), stage_tools, stage.get('model_tier','auto'))
             if agent["status"] in ("done", "completed"):
@@ -1001,7 +1031,8 @@ class ResearchEngine:
             self._loop(stage_limit, mark_incomplete=False)
             self.guard_pause()
             agent["steps"] = [s["id"] for s in self.run["steps"] if s.get("agent") == agent["id"] and s.get("turn") == self.turn_id]
-            agent["status"] = "completed" if self.run["status"] == "completed" else "done"
+            if agent["status"] != "skipped":
+                agent["status"] = "completed" if self.run["status"] == "completed" else "done"
             self.event("stage", f"阶段 {agent['id']} 结束：{agent['status']}", status=agent["status"])
         self.run["active_agent"] = None
         if self.run["status"] == "running":
@@ -1061,8 +1092,7 @@ class ResearchEngine:
         if tool == "literature":
             rows = tools.literature(args.get("query"), timeout=max(1, min(15, self.seconds_left())))
             for row in rows:
-                row["id"] = f"p{len(run['sources'])+1}"
-                run["sources"].append(row)
+                self.add_source(row)
             run["evidence_collected"] = True
             return rows
         if tool == "read":
@@ -1287,7 +1317,6 @@ def create(body):
                 destination=work/(Path(asset['name']).stem+'-'+asset['id']+Path(asset['name']).suffix)
             destination.write_bytes(payload)
             asset['workspace_path']=destination.name
-    state = memory_state()
     context = memory.recall(question) if body.get("use_memory", True) else {"facts": [], "method": None, "text": ""}
     experience = context.get("method")
     manifest = {}
@@ -1336,6 +1365,7 @@ def resume(run, folder, question, *, token_limit=None, seconds_limit=None, max_s
     run["budget_call_start"] = len(run.get("calls", []))
     run["plan"], run["research_kind"], run["workflow"] = None, None, None
     run["agents"], run["active_agent"], run["reflections"] = [], None, []
+    run["gap_fill"], run["feasibility"] = None, None
     budget_enabled = bool(run.get("budget_enabled", True))
 
     def pick(value, current, label, default=None):

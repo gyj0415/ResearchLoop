@@ -280,7 +280,7 @@ def run_g1(source: str) -> GateResult:
     fn = ns.get("run")
     if not callable(fn):
         return _gate("G1", False,
-                     f"G1 拒绝：候选未暴露可调用 `run(inputs)`（契约见 src/gates.py 模块注释）")
+                     "G1 拒绝：候选未暴露可调用 `run(inputs)`（契约见 src/gates.py 模块注释）")
     try:
         import inspect
         n_params = len(inspect.signature(fn).parameters)

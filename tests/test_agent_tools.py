@@ -1,6 +1,5 @@
 """Real local tool execution + deterministic delegated decisions, no model calls."""
 import copy
-import json
 import sys
 import tempfile
 import threading
@@ -9,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from researchloop import storage
-from researchloop.engine import core, engineering, delegation, history, workflow, routing
+from researchloop.engine import core, engineering, history, workflow, routing
 from researchloop.engine.permissions import PermissionDenied
 from researchloop.ollama import BudgetError
 

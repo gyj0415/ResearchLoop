@@ -6,7 +6,6 @@ Roles are free-form within the known set; the plan is retried once with the
 parse error quoted before falling back to the deterministic default, and the
 fallback is recorded rather than hidden.
 """
-import json
 
 from . import roles
 
@@ -35,6 +34,19 @@ MAX_STAGE_STEPS = 12
 ROLE_ALIASES = {"规划": "planner", "计划": "planner", "实验": "experimenter", "复核": "verifier",
                 "验证": "verifier", "报告": "reporter", "撰写": "reporter",
                 "planner": "planner", "experimenter": "experimenter", "verifier": "verifier", "reporter": "reporter"}
+STAGE_ESSENTIALS = {"experimenter": ["hypothesis", "experiment", "command_experiment"], "verifier": ["verify"]}
+
+
+def stage_tools(role, tools):
+    """A restricted stage keeps the tools its role exists to use."""
+    if not tools:
+        return tools
+    return list(dict.fromkeys([*tools, *STAGE_ESSENTIALS.get(role, [])]))
+
+
+def role_tools():
+    """Tool ceilings shown to a workflow designer; custom stage names run as generalist."""
+    return {name: roles.tools_for(name) for name in roles.ROLES}
 
 
 def default_stages():
@@ -79,7 +91,8 @@ def validate(stages):
             chosen = [item for item in tools if item in ceiling]
             unknown = [item for item in tools if item not in ceiling]
             if unknown:
-                raise ValueError(f"第{index + 1}阶段工具不在该角色范围内：{unknown}")
+                raise ValueError(f"第{index + 1}阶段工具不在{role}角色范围内：{unknown}；该角色可用：{roles.tools_for(role)}。"
+                                 "tools 是该阶段角色的工具子集，不是你当前可用的工具；不确定时省略 tools")
             if not chosen:
                 raise ValueError(f"第{index + 1}阶段 tools 不能为空")
             selected = chosen
@@ -186,8 +199,9 @@ def plan(engine):
 from . import registry
 
 registry.register_tool("design_workflow", design,
-                       description="设计研究的工作流：阶段数量与划分由问题决定（1–8），可自定义阶段名并用 tools 限定工具。",
+                       description="设计研究的工作流：阶段数量与划分由问题决定（1–8），可自定义阶段名（按 generalist 执行）。"
+                                   "tools 可省略；填写时只能取自 role_tools 中该阶段角色的工具，与你当前可用的工具无关。",
                        arguments={"reason": "整体设计理由",
                                   "stages": [{"role": "planner", "goal": "阶段目标", "why": "为什么需要这个阶段",
-                                              "max_steps": 3, "tools": ["literature"]}]},
+                                              "max_steps": 3}]},
                        required=["reason", "stages"])

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .ir import (
-    Act, Dim, Input, LayerNorm, Node, Reduce, ScalarOp, Softmax, TensorOp, Unary,
+    Act, LayerNorm, Node, Reduce, Softmax, TensorOp, Unary,
 )
 
 __all__ = ["OpProfile", "Evidence", "profile_ops", "estimate", "profile_task"]

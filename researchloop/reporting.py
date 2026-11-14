@@ -29,7 +29,7 @@ def validate_manuscript(value, citations):
     from .engine.protocol import validate
     validate(value, MANUSCRIPT_SCHEMA, "manuscript")
     for text in value.values():
-        for evidence_id in re.findall(r"\[([aphx]\d+)\]", text):
+        for evidence_id in re.findall(r"\[([adphx]\d+)\]", text):
             if evidence_id not in citations:
                 raise ValueError(f"正文引用 [{evidence_id}] 必须列入本次 citations，且属于已有证据")
     return {key: value[key].strip() for key in FIELDS}

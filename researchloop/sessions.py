@@ -94,7 +94,10 @@ class SessionManager:
                 raise ValueError("该研究不在运行或排队中")
             engine = job["engine"]
             if run_id in self.running:
+                if getattr(engine, "finishing", False):
+                    return {"requested": False, "message": "研究正在收尾，结束后可以追问或从调用分支"}
                 engine.pause_requested.set()
+                engine.status_before_pause = engine.run["status"]
                 engine.run["status"] = "pausing"
                 engine.save()
                 return {"requested": True, "message": "当前调用结束后暂停该研究，其他研究继续运行"}

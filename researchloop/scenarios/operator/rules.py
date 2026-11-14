@@ -18,7 +18,7 @@ R4（预分配/就地）不是结构改写，由 codegen 落实（归约用 out=
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from . import ir
 from .ir import (

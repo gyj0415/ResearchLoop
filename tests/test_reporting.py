@@ -2,7 +2,6 @@
 import copy
 import io
 import hashlib
-import json
 import tempfile
 import threading
 import unittest

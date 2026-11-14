@@ -2,7 +2,6 @@
 import csv
 import hashlib
 import html
-import io
 import json
 import os
 import re

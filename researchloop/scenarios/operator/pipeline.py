@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import bandit, evidence, gates_adapter, intake, lifter, memory
+from . import bandit, evidence, gates_adapter, lifter, memory
 from .ir import Node, UnsupportedPattern
 from . import search as search_mod
 from .verdict import decide

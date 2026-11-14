@@ -91,6 +91,49 @@ class ResearchEngineTests(unittest.TestCase):
                 validate(code)
         validate("values = rng.random(100)\nemit_result({'metrics': {'mean': float(np.mean(values))}})")
 
+    def test_module_and_file_escapes_are_rejected_statically(self):
+        for code in ('p = statistics.sys.modules["os"].getcwd()',
+                     'x = np.fromregex("config.json", r"(.*)", [("a", "U200")])',
+                     'np.zeros(1).dump("x.pkl")'):
+            with self.assertRaises(ValueError):
+                validate(code)
+
+    def test_worker_runtime_blocks_processes_and_files_outside_assets(self):
+        import subprocess
+        import sys
+        directory = Path(tempfile.mkdtemp(dir=storage.ROOT / ".cache"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        asset = directory / "a1"
+        asset.write_text("x\n1\n2\n", encoding="utf-8")
+        secret = directory / "secret.txt"
+        secret.write_text("key", encoding="utf-8")
+        probes = {
+            "system": "statistics.sys.modules['os'].system('echo escaped')",
+            "read": f"statistics.sys.modules['io'].open({str(secret)!r}).read()",
+            "write": f"statistics.sys.modules['io'].open({str(directory / 'out.txt')!r}, 'w').write('x')",
+            "ok": "rows = load_csv('a1')\nv = np.linalg.norm(np.fft.fft(np.array([float(r['x']) for r in rows])))\n"
+                  "emit_result({'metrics': {'norm': float(v)}})",
+        }
+        script = ("import ast, json, sys\nfrom researchloop.engine import worker\nworker.validate = ast.parse\n"
+                  "try:\n    worker.run(json.loads(sys.argv[1]))\n    print('RESULT=ok')\n"
+                  "except Exception as error:\n    print('RESULT=' + type(error).__name__)\n")
+        for name, code in probes.items():
+            payload = json.dumps({"code": code, "seed": 1, "phase": "explore", "assets": {"a1": str(asset)}})
+            done = subprocess.run([sys.executable, "-c", script, payload], cwd=storage.ROOT,
+                                  capture_output=True, text=True, timeout=60)
+            outcome = done.stdout.rsplit("RESULT=", 1)[-1].strip()
+            if name == "ok":
+                self.assertEqual(outcome, "ok", done.stderr)
+            else:
+                self.assertEqual(outcome, "PermissionError", (name, done.stdout, done.stderr))
+        self.assertFalse((directory / "out.txt").exists())
+
+    def test_complex_metrics_are_rejected(self):
+        from researchloop.engine import worker
+        with self.assertRaises(ValueError):
+            worker.execute({"code": "emit_result({'metrics': {'m': np.complex128(0.2 + 5j)}})",
+                            "seed": 1, "phase": "explore", "assets": {}})
+
     def test_random_generator_rejection_names_an_actionable_fix(self):
         for code in ("rng = np.random.default_rng()\nvalues = rng.normal(size=10)",
                      "np.random.seed(42)\nvalues = rng.normal(size=10)",
@@ -106,7 +149,6 @@ class ResearchEngineTests(unittest.TestCase):
     def test_protocol_calls_the_model_for_content_but_never_skips_real_verification(self):
         engine = self.engine()
         engine.decide = engine.ask
-        h = self.actions().__next__()
         rows = list(self.actions())
         payloads = [{"feasible": True, "method": "比较独立模拟的误差", "limitations": "模拟情景", "literature_query": ""},
                     rows[1]["args"], rows[2]["args"], {"next_action": "finish", "reason": "已完成独立复核"}, rows[4]["args"]]
@@ -465,6 +507,200 @@ class ResearchEngineTests(unittest.TestCase):
         self.assertEqual([step["tool"] for step in run["steps"]],
                          ["finish", "finish", "hypothesis", "experiment", "verify", "finish"])
         self.assertTrue(run["experiments"][0]["verification"])
+
+    def test_resumed_hypothesis_runs_in_stage_restricted_to_inspect(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False, max_steps=12)
+        engine.run["evidence_collected"] = True
+        engine.apply("plan", {"feasible": True, "method": "数值模拟", "limitations": "",
+                              "literature_query": "", "research_kind": "simulation"})
+        engine.apply("hypothesis", {"statement": "均值误差小于0.5", "prediction": "误差较小",
+                                    "controls": "固定采样规模", "metric": "error", "relation": "lt",
+                                    "threshold": 0.5})
+        engine.run["plan"], engine.run["research_kind"] = None, None
+        engine.run["workflow"] = {"source": "fixture", "stages": workflow.validate([
+            {"role": "experimenter", "goal": "运行模拟", "why": "数值检验", "max_steps": 1, "tools": ["inspect"]},
+            {"role": "verifier", "goal": "复核", "why": "独立重跑", "max_steps": 1},
+            {"role": "reporter", "goal": "报告", "why": "收束", "max_steps": 1},
+        ])}
+        offered = []
+
+        def decide(choices):
+            offered.append(engine.available_tools())
+            return next(choices)
+
+        decisions = iter([
+            {"tool": "experiment", "args": {"hypothesis_id": "h1", "code":
+                "values = rng.normal(size=200)\nemit_result({'metrics': {'error': float(abs(np.mean(values)))}})"}},
+            {"tool": "verify", "args": {"experiment_id": "x1"}},
+            {"tool": "finish", "args": {"conclusion": "仅在所设模拟机制中完成了独立复核。",
+                                      "citations": ["h1", "x1"], "lesson": ""}},
+        ])
+        engine.decide = lambda: decide(decisions)
+        run = engine.execute()
+        self.assertIn("experiment", offered[0])
+        self.assertEqual([step["tool"] for step in run["steps"]], ["experiment", "verify", "finish"])
+        self.assertEqual(run["status"], "completed")
+
+    def test_stage_without_available_tools_does_not_call_the_model(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        engine.run["evidence_collected"] = True
+        engine.apply("plan", {"feasible": True, "method": "比较来源", "limitations": "",
+                              "literature_query": "", "research_kind": "literature"})
+        engine.run["workflow"] = {"source": "fixture", "stages": workflow.validate([
+            {"role": "generalist", "goal": "检查材料", "why": "误限定工具", "max_steps": 3, "tools": ["inspect"]},
+            {"role": "reporter", "goal": "报告缺口", "why": "收束", "max_steps": 1},
+        ])}
+        roles_asked = []
+
+        def decide():
+            roles_asked.append(engine.run["active_agent"]["role"])
+            return {"tool": "finish", "args": {"conclusion": "没有取得证据，研究未完成。", "citations": [], "lesson": ""}}
+
+        engine.decide = decide
+        run = engine.execute()
+        self.assertEqual(roles_asked, ["reporter"])
+        self.assertEqual([step["tool"] for step in run["steps"]], ["finish"])
+        self.assertEqual(run["agents"][0]["status"], "skipped")
+
+    def test_workflow_designer_sees_role_tool_ceilings(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        engine.run["active_agent"] = {"id": "g0", "role": "planner"}
+        captured = {}
+
+        def complete(system, prompt, schema, **kwargs):
+            captured["prompt"] = prompt
+            return {"tool": "inspect", "reason": "先看材料", "args": {}}, {"source": "fixture"}
+
+        engine.complete = complete
+        engine.agent_step()
+        ceilings = captured["prompt"]["role_tools"]
+        self.assertIn("experiment", ceilings["experimenter"])
+        self.assertEqual(ceilings["verifier"][0], "verify")
+        self.assertNotIn("inspect", ceilings["verifier"])
+        with self.assertRaises(ValueError) as raised:
+            workflow.validate([{"role": "verifier", "goal": "复核", "why": "重跑", "tools": ["inspect"]}])
+        self.assertIn("verify", str(raised.exception))
+
+    def test_wrap_up_reached_mid_stage_accepts_finish(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        engine.run["evidence_collected"] = True
+        engine.apply("plan", {"feasible": True, "method": "比较来源", "limitations": "",
+                              "literature_query": "", "research_kind": "literature"})
+        engine.run["workflow"] = {"source": "fixture", "stages": workflow.validate([
+            {"role": "analyst", "goal": "检索", "why": "取证", "max_steps": 3},
+            {"role": "reporter", "goal": "报告", "why": "收束", "max_steps": 1},
+        ])}
+        engine.in_wrap_up = lambda: len(engine.run["steps"]) >= 1
+        decisions = iter([
+            {"tool": "literature", "args": {"query": "测试检索"}},
+            {"tool": "finish", "args": {"conclusion": "预算不足，未取得可核验证据，研究未完成。", "citations": [], "lesson": ""}},
+        ])
+        engine.decide = lambda: next(decisions)
+        with patch("researchloop.engine.core.tools.literature", return_value=[]):
+            run = engine.execute()
+        self.assertEqual([step["tool"] for step in run["steps"]], ["literature", "finish"])
+        self.assertEqual(run["steps"][1]["status"], "completed")
+
+    def test_follow_up_resets_previous_evidence_gap(self):
+        engine = self.engine(use_memory=False)
+        engine.run["evidence_collected"] = True
+        engine.apply("plan", {"feasible": False, "method": "先取证", "limitations": "缺正文",
+                              "literature_query": "", "research_kind": "literature"})
+        self.assertTrue(engine.run["gap_fill"]["required"])
+        engine.run["status"] = "inconclusive"
+        follow = core.resume(engine.run, engine.folder, "新的追问：换一个完全不同的问题来研究")
+        self.assertFalse((follow.run.get("gap_fill") or {}).get("required"))
+        self.assertIsNone(follow.run.get("feasibility"))
+
+    def test_stage_that_used_its_tools_is_not_marked_skipped(self):
+        engine = self.engine(workflow_mode="plan", use_memory=False)
+        engine.run["evidence_collected"] = True
+        engine.apply("plan", {"feasible": True, "method": "数值模拟", "limitations": "",
+                              "literature_query": "", "research_kind": "simulation"})
+        engine.apply("hypothesis", {"statement": "均值误差小于0.5", "prediction": "误差较小", "controls": "固定规模",
+                                    "metric": "error", "relation": "lt", "threshold": 0.5})
+        engine.apply("experiment", {"hypothesis_id": "h1", "code":
+            "values = rng.normal(size=200)\nemit_result({'metrics': {'error': float(abs(np.mean(values)))}})"})
+        engine.run["workflow"] = {"source": "fixture", "stages": workflow.validate([
+            {"role": "verifier", "goal": "复核", "why": "独立重跑", "max_steps": 3, "tools": ["verify"]},
+            {"role": "reporter", "goal": "报告", "why": "收束", "max_steps": 1},
+        ])}
+        decisions = iter([
+            {"tool": "verify", "args": {"experiment_id": "x1"}},
+            {"tool": "finish", "args": {"conclusion": "仅在所设模拟机制中完成了独立复核。",
+                                      "citations": ["h1", "x1"], "lesson": ""}},
+        ])
+        engine.decide = lambda: next(decisions)
+        run = engine.execute()
+        self.assertEqual([step["tool"] for step in run["steps"]], ["verify", "finish"])
+        self.assertEqual(run["agents"][0]["status"], "done")
+
+    def test_pause_arriving_while_run_finishes_does_not_leave_pausing(self):
+        from researchloop.sessions import SessionManager
+        for moment in ("after_loop", "during_report"):
+            engine = self.engine(use_memory=False)
+            manager = SessionManager(max_parallel=1)
+            manager.jobs[engine.run["id"]] = {"engine": engine}
+            manager.running.add(engine.run["id"])
+            replies = []
+            engine.decide = lambda: {"tool": "finish", "args": {"conclusion": "没有证据，研究未完成。", "citations": [], "lesson": ""}}
+            if moment == "after_loop":
+                original = engine._loop
+                def loop(*args, original=original, manager=manager, engine=engine, **kwargs):
+                    original(*args, **kwargs)
+                    replies.append(manager.pause(engine.run["id"]))
+                engine._loop = loop
+            else:
+                original = engine.write_report
+                def write(original=original, manager=manager, engine=engine):
+                    replies.append(manager.pause(engine.run["id"]))
+                    return original()
+                engine.write_report = write
+            run = engine.execute()
+            self.assertNotEqual(run["status"], "pausing", moment)
+            self.assertNotEqual(storage.read_json(engine.folder / "run.json")["status"], "pausing", moment)
+            if moment == "during_report":
+                self.assertFalse(replies[0]["requested"])
+
+    def test_fact_memory_rejects_metadata_only_sources_and_reserved_predicates(self):
+        engine = self.engine(use_memory=False)
+        engine.run["sources"] = [
+            {"id": "p1", "title": "只有标题", "evidence_scope": "只有元数据，不是结论证据"},
+            {"id": "p2", "title": "有摘要", "abstract": "摘要内容", "evidence_scope": "摘要"}]
+        fact = {"predicate": "测试关系", "object": "对象", "summary": "摘要支持的有限结论"}
+        with self.assertRaises(ValueError):
+            engine.apply("remember_fact", {**fact, "evidence_ids": ["p1"]})
+        for predicate in ("user_preference", " User_Note ", "method_lesson"):
+            with self.assertRaises(ValueError):
+                engine.apply("remember_fact", {**fact, "predicate": predicate, "evidence_ids": ["p2"]})
+        self.assertEqual(engine.apply("remember_fact", {**fact, "evidence_ids": ["p2"]})["status"], "pending_report")
+
+    def test_repeated_literature_and_platform_hits_keep_one_evidence_id(self):
+        engine = self.engine(use_memory=False)
+        paper = {"title": "论文", "doi": "10.1/ABC", "url": "https://doi.org/10.1/abc", "abstract": "",
+                 "evidence_scope": "只有元数据，不是结论证据"}
+        with patch("researchloop.engine.core.tools.literature",
+                   side_effect=[[dict(paper)], [{**paper, "doi": "10.1/abc", "abstract": "后来取得的摘要", "evidence_scope": "摘要"}]]):
+            first = engine.apply("literature", {"query": "一次"})
+            second = engine.apply("literature", {"query": "二次"})
+        self.assertEqual(first[0]["id"], second[0]["id"])
+        self.assertEqual(len(engine.run["sources"]), 1)
+        self.assertEqual(engine.run["sources"][0]["abstract"], "后来取得的摘要")
+        post = {"title": "帖子", "url": "https://tieba.example/p/1", "snippet": "内容"}
+        with patch("researchloop.platforms.search", side_effect=lambda *a, **kw: {
+                "label": "贴吧", "results": [dict(post)]}), \
+                patch.object(engine, "available_platforms", return_value=["tieba"]):
+            engine.apply("platform_search", {"platform": "tieba", "query": "一次"})
+            engine.apply("platform_search", {"platform": "tieba", "query": "二次"})
+        self.assertEqual(len(engine.run["sources"]), 2)
+
+    def test_manuscript_document_citation_must_be_listed(self):
+        from researchloop import reporting
+        manuscript = {key: "内容" for key in reporting.FIELDS}
+        manuscript["results"] = "文档正文支持该结论 [d1]。"
+        with self.assertRaises(ValueError):
+            reporting.validate_manuscript(manuscript, ["p1"])
+        self.assertTrue(reporting.validate_manuscript(manuscript, ["d1"]))
 
     def test_repeated_experimenter_finish_still_reaches_gap_report(self):
         engine = self.engine(workflow_mode="plan", use_memory=False)

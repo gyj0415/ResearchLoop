@@ -78,6 +78,6 @@ PDF 使用 `reportlab`（已列入依赖），无需安装 TeX。Windows 默认�
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-CLI 与网页共享本地文件，应避免同时启动研究。实验子进程限制接口，但不是面对恶意代码的安全沙箱。模型输出和记忆需要证据核验；重新调用模型不保证逐字复现。
+CLI 与网页共享本地文件，应避免同时启动研究。实验子进程限制接口，并以审计钩子拒绝启动进程、联网、写文件和读取声明材料以外的路径，但仍不是操作系统级沙箱。本地服务只接受 `localhost`/`127.0.0.1` 的 Host；更换云端或搜索服务地址后需重新填写密钥。模型输出和记忆需要证据核验；重新调用模型不保证逐字复现。
 
 调用与会话分离参考 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)；事实记忆参考 [ReEscape Protocol](https://github.com/heky12356/ReEscape-Protocol)。历史测量报告见 [VERIFICATION.md](VERIFICATION.md)，不代表当前新流程已经获得同样收益。

@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 __all__ = ["Verdict", "REASON_CODES", "NEXT_ACTIONS", "decide", "TARGET_SPEEDUP"]
 

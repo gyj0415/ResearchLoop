@@ -7,7 +7,6 @@ import uuid
 import urllib.parse
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from types import SimpleNamespace
 
 from . import __version__
@@ -18,7 +17,6 @@ from .scenarios.operator.custom import save_task
 from .engine import core as research_core
 from .engine import registry as research_registry
 from .engine import roles as research_roles
-from .engine.tools import TOOLS as RESEARCH_TOOLS
 from .storage import LOCK, ROOT, RUNS, archive_run, delete_run, list_runs, masked_settings, now, read_json, run_path, settings, write_json
 from . import cloudllm
 from . import db
@@ -61,9 +59,37 @@ def launch_research(engine):
     SESSIONS.submit(engine)
 
 
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def local_host(value):
+    """DNS rebinding sends a foreign name in Host while reaching this loopback socket."""
+    try:
+        return urllib.parse.urlsplit("//" + str(value or "")).hostname in LOCAL_HOSTS
+    except ValueError:
+        return False
+
+
+def stored_key_for(base_url, current):
+    """A saved key is only reused for the endpoint it was saved with."""
+    try:
+        same = cloudllm.normalise(base_url) == cloudllm.normalise(current.get("base_url"))
+    except ValueError:
+        same = False
+    return str(current.get("api_key") or "") if same else ""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        if not local_host(self.headers.get("Host")):
+            self.send(403, {"error": "Only localhost requests are allowed"})
+            return False
+        return True
 
     def send(self, status, body, content_type="application/json; charset=utf-8", headers=None):
         if isinstance(body, (dict, list)):
@@ -177,6 +203,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(415, {"error": "Content-Type must be application/json"})
             length = int(self.headers.get("Content-Length", 0))
             limit = 40 * 1024 * 1024 if urllib.parse.urlparse(self.path).path == "/api/research" else 80000
+            if length < 0:
+                raise ValueError("Content-Length 无效")
             if length > limit:
                 raise ValueError("请求内容过大")
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -219,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
                 given = body.get("cloud") if isinstance(body.get("cloud"), dict) else body
                 current = settings()["cloud"]
                 base_url = given.get("base_url") or current.get("base_url")
-                api_key = given.get("api_key") or current.get("api_key")
+                api_key = given.get("api_key") or stored_key_for(base_url, current)
                 if not str(base_url or "").strip():
                     raise ValueError("请先填写云端服务地址")
                 return self.send(200, cloudllm.probe(base_url, api_key))
@@ -258,17 +286,17 @@ class Handler(BaseHTTPRequestHandler):
                     cloud_model = str(given.get("model") or current.get("model") or "").strip()
                     if not cloud_model or len(cloud_model) > 160:
                         raise ValueError("请填写云端模型名称")
-                    api_key = str(given.get("api_key") or "").strip() or str(current.get("api_key") or "")
+                    api_key = str(given.get("api_key") or "").strip() or stored_key_for(base_url, current)
                     if not 8 <= len(api_key) <= 400:
-                        raise ValueError("启用云端模型需要 8–400 字符的 API Key")
+                        raise ValueError("启用云端模型需要 8–400 字符的 API Key；更换服务地址后需重新填写")
                     value_cloud = {"enabled": True, "base_url": base_url, "model": cloud_model, "api_key": api_key}
                 else:
                     # Keep whatever the user typed/selected even while the provider is off,
                     # so a restart does not silently wipe the configuration.
-                    value_cloud = {"enabled": False,
-                                   "base_url": cloudllm.normalise(given.get("base_url") or current.get("base_url") or ""),
+                    disabled_url = cloudllm.normalise(given.get("base_url") or current.get("base_url") or "")
+                    value_cloud = {"enabled": False, "base_url": disabled_url,
                                    "model": str(given.get("model") or current.get("model") or "").strip()[:160],
-                                   "api_key": str(given.get("api_key") or "").strip() or str(current.get("api_key") or "")}
+                                   "api_key": str(given.get("api_key") or "").strip() or stored_key_for(disabled_url, current)}
                 current_web = settings()["web"]
                 web_given = body.get("web") if isinstance(body.get("web"), dict) else {}
                 web_enabled = bool(web_given.get("enabled"))
@@ -282,7 +310,9 @@ class Handler(BaseHTTPRequestHandler):
                     parsed_endpoint = urllib.parse.urlparse(endpoint)
                     if parsed_endpoint.scheme not in ("http", "https") or not parsed_endpoint.hostname:
                         raise ValueError("搜索服务地址必须是 http(s) URL")
-                web_key = str(web_given.get("search_api_key") or "").strip() or str(current_web.get("search_api_key") or "")
+                web_key = str(web_given.get("search_api_key") or "").strip() or (
+                    str(current_web.get("search_api_key") or "")
+                    if endpoint.rstrip("/") == str(current_web.get("search_endpoint") or "").strip().rstrip("/") else "")
                 if web_enabled and provider == "tavily" and not 8 <= len(web_key) <= 400:
                     raise ValueError("Tavily 搜索需要 8–400 字符的 API Key")
                 web_value = {"enabled": web_enabled, "search_provider": provider, "search_endpoint": endpoint,

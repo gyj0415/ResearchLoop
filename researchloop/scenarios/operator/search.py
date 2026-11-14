@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from . import codegen, ir
 from .ir import Node, UnsupportedPattern
-from .rules import RULES, _NOTES
+from .rules import RULES
 
 __all__ = ["Hypothesis", "Candidate", "search", "build_candidates",
            "FAMILY_OF_RULE"]

@@ -4,7 +4,6 @@ import json
 import uuid
 from researchloop import storage
 from researchloop.ollama import BudgetError
-from . import history
 
 
 class PermissionDenied(ValueError):

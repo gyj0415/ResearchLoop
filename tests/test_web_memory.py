@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from researchloop import facts, storage, webaccess
-from researchloop.engine import core, registry, roles, workflow
+from researchloop.engine import registry, roles, workflow
 
 
 class WebSafetyTests(unittest.TestCase):
@@ -20,6 +20,16 @@ class WebSafetyTests(unittest.TestCase):
     def test_public_urls_are_allowed(self):
         for url in ("https://example.com/page", "http://example.com"):
             self.assertEqual(webaccess.validate_outbound(url).hostname, "example.com")
+
+    def test_redirect_to_local_target_is_rejected_before_following(self):
+        import urllib.request
+        handler = webaccess.CheckedRedirect(())
+        request = urllib.request.Request("https://example.com/start")
+        for target in ("http://127.0.0.1:11434/api/tags", "http://169.254.169.254/latest", "http://localhost/x"):
+            with self.assertRaises(ValueError, msg=target):
+                handler.redirect_request(request, None, 302, "Found", {}, target)
+        followed = handler.redirect_request(request, None, 302, "Found", {}, "https://example.com/next")
+        self.assertEqual(followed.full_url, "https://example.com/next")
 
     def test_search_input_is_validated_before_any_request(self):
         with self.assertRaises(ValueError):

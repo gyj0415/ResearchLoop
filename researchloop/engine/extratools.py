@@ -6,6 +6,8 @@ is needed to add a capability.
 from .. import facts, storage, webaccess
 from . import registry
 
+RESERVED_PREDICATES = {"user_preference", "user_note", "method_lesson"}
+
 
 def _web_settings():
     return storage.settings()["web"]
@@ -85,7 +87,10 @@ def remember_fact(engine, args):
     ids = args.get("evidence_ids")
     allowed = set(engine.memory_evidence_ids())
     if not isinstance(ids, list) or not ids or any(identifier not in allowed for identifier in ids):
-        raise ValueError("研究事实记忆必须绑定已有材料、来源或已复核实验的 evidence_ids；未核实判断不能写成事实。偏好可在记忆页面添加。")
+        raise ValueError("研究事实记忆必须绑定已有材料、含正文或摘要的来源或已复核实验的 evidence_ids；"
+                         "只有元数据的来源和未核实判断不能写成事实。偏好可在记忆页面添加。")
+    if str(args.get("predicate") or "").strip().casefold() in RESERVED_PREDICATES:
+        raise ValueError("该谓词保留给用户在记忆页面添加的偏好、备注或方法经验，研究事实请使用描述关系的谓词")
     pending = {"predicate": str(args.get("predicate") or ""), "object": str(args.get("object") or ""),
                "summary": str(args.get("summary") or ""), "tags": args.get("tags"),
                "confidence": args.get("confidence") or 0.6, "evidence_ids": list(ids),
@@ -134,10 +139,9 @@ def platform_search(engine, args):
     disabled = [key for key in engine.run.get("resource_health", {}) if reliability.blocked(engine.run, key, cfg)]
     result = platforms.search(platform, query, limit=args.get("limit") or 5, blocked_resources=disabled)
     for row in result["results"]:
-        row["id"] = f"p{len(engine.run['sources']) + 1}"
         row["evidence_scope"] = f"{result['label']}平台检索结果（平台内容，不是同行评议）"
         row.setdefault("abstract", row.get("snippet", ""))
-        engine.run["sources"].append(row)
+        engine.add_source(row)
     engine.run["evidence_collected"] = True
     return result
 

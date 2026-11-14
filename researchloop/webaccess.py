@@ -1,7 +1,7 @@
 """Web access for research tools, ported from the ReEscape Protocol design.
 
 `validate_outbound` blocks loopback/private/link-local targets before any
-request (redirect targets are re-validated), fetch limits bytes and characters,
+request and before each redirect hop is followed, fetch limits bytes and characters,
 and search supports a SearxNG or Tavily endpoint from local settings.
 """
 import html
@@ -57,6 +57,18 @@ def validate_outbound(raw, allowed_hosts=()):
     return parsed
 
 
+class CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    """Validate each redirect hop before urllib sends the next request."""
+
+    def __init__(self, allowed_hosts=()):
+        super().__init__()
+        self.allowed_hosts = allowed_hosts
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_outbound(urllib.parse.urljoin(req.full_url, newurl), self.allowed_hosts)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -100,7 +112,8 @@ def fetch(raw, max_chars=MAX_CHARS, timeout=TIMEOUT, user_agent=USER_AGENT, allo
     request = urllib.request.Request(parsed.geturl(), headers={
         "Accept": "text/html,text/plain,application/json,application/xml;q=0.8,*/*;q=0.1",
         "User-Agent": user_agent})
-    with urllib.request.urlopen(request, timeout=max(1, min(30, timeout))) as response:
+    opener = urllib.request.build_opener(CheckedRedirect(allowed_hosts))
+    with opener.open(request, timeout=max(1, min(30, timeout))) as response:
         validate_outbound(response.geturl(), allowed_hosts)
         media = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         charset = response.headers.get_content_charset() or "utf-8"
