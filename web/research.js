@@ -9,14 +9,14 @@ for(const child of [...toolPage.children])if(!child.classList.contains('page-hea
 toolArchive.append($('#prepare-button'));toolPage.append(toolArchive);
 toolArchive.insertAdjacentHTML('beforebegin','<div id="research-tool-list" class="research-tools"></div>');
 $('#page-data h1').textContent='材料与工具';
-$('#page-data .subtitle').textContent='当前支持文献元数据、文本与CSV材料、可执行数值实验和固定判据复核。扩展工具不改变研究主循环。';
+$('#page-data .subtitle').textContent='查看工具的输入要求和使用范围。';
 $('.protocol-callout strong').textContent='评价研究过程，而不只看报告是否写完';
 $('.protocol-callout p').textContent='记录证据、可证伪假设、真实实验与独立复核。比较历史经验时保持同问题、材料、模型和预算；复核完成也可能得到否定结论。';
 $('#log-source').insertAdjacentHTML('afterbegin','<option value="research">科研 Agent</option>');
 
 renderTop=function(){
   previousTop();
-  $('#dataset-summary').textContent=`${state.research_tools?.length||0} 类工具 · 文献检索 / 材料读取 / Python实验 / 独立复核 · 缺少工具或证据时明确停止`;
+  $('#dataset-summary').textContent=`${state.research_tools?.length||0} 项工具可用 · 当前会话 ${run?.assets?.length||0} 份材料`;
   $('#test-seal').classList.add('hidden');
   if(page==='data')$('#page-label').textContent='材料与工具';
   $('#draft-brief').disabled=!!state.active_run;
@@ -38,6 +38,15 @@ renderMetrics=function(){
 };
 renderRun=function(){
   if(run&&run.domain!=='research'){previousRun();return;}
+  if(!run){
+    $('#session-title').textContent='研究对话';
+    $('#session-question').textContent='从工作台开始一个新的研究，或从左侧研究记录里打开已有会话。';
+    $('#session-status').textContent='未选择';
+  }else{
+    $('#session-title').textContent=(run.question||run.task||'研究对话').slice(0,60);
+    $('#session-question').textContent=run.question||'';
+    $('#session-status').textContent=statuses[run.status]||run.status;
+  }
   $('#diagnostics-panel').classList.add('hidden');
   $('#evidence-experiment').innerHTML='';$('#evidence-claim').innerHTML='';
   if(!run){
@@ -57,9 +66,21 @@ renderRun=function(){
   $('#hypothesis').innerHTML=`<span class="hypothesis-tag">${h?esc(h.id):'收集证据中'}</span><div class="hypothesis-text">${esc(h?.statement||run.question)}</div><div class="hypothesis-source">${h?`预测：${esc(h.prediction)}<br>控制：${esc(h.controls)}<br>冻结判据：${esc(h.metric)} ${esc(h.relation)} ${esc(h.threshold)}`:'模型将先检查条件、材料和可用工具，不预设结论。'}</div>`;
   $('#chart').innerHTML=`<div class="research-guide">${esc(run.question)}</div>`;
   $('#experiments').innerHTML=run.steps.length?run.steps.map(s=>`<details class="research-step"><summary><span class="pill subtle">${esc(s.id)} · ${esc(s.tool)}</span><strong>${esc(s.reason)}</strong><span class="${s.status==='failed'?'negative':''}">${s.status==='failed'?'失败，等待修正':'已执行'}</span></summary><pre>${esc(JSON.stringify({arguments:s.args,observation:s.observation},null,2))}</pre></details>`).join(''):empty('正在规划第一步','模型正在结合问题、预算与工具拟定研究行动。');
-  const report=run.report;
-  $('#evidence').innerHTML=`${report?`<div class="research-conclusion"><h3>Agent分析与局限</h3><p>${esc(report.conclusion)}</p><small>引用：${esc(report.citations.join(', '))}。以以下实测记录为准。</small></div>`:''}<div class="research-evidence">${run.experiments.map(e=>`<article><h3>${esc(e.id)} · ${esc(e.hypothesis_id)}</h3><p>${e.result?`探索实测：${esc(JSON.stringify(e.result.metrics))}`:esc(e.error||'执行中')}</p><p>${e.verification?`独立重跑：${esc(JSON.stringify(e.verification.result.metrics))} · ${e.verification.check.passed?'满足预注册判据':'未满足预注册判据'}`:'尚未独立复核'}</p><details><summary>冻结代码与判据</summary><pre>${esc(e.code)}</pre></details></article>`).join('')}${run.sources.map(p=>`<article><h3>${esc(p.id)} · ${esc(p.title)}</h3><p>${esc(p.abstract||'无摘要，不能据此验证论文结论。')}</p><a href="${esc(p.url)}" target="_blank" rel="noreferrer">DOI来源 ↗</a></article>`).join('')}${run.assets.map(a=>`<article><h3>${esc(a.id)} · ${esc(a.name)}</h3><p>${number(a.bytes)}字节 · SHA256 ${esc(a.sha256.slice(0,16))}…</p></article>`).join('')}</div>${!run.experiments.length&&!run.sources.length&&!run.assets.length?empty('尚无研究证据','查看上方研究行动；预算耗尽时会保留未完成状态。'):''}`;
+  renderResearchEvidence(run);
 };
+function renderResearchEvidence(value){
+  const box=$('#evidence'),stamp=JSON.stringify([value.id,value.experiments,value.sources,value.assets]);
+  if(box._evidenceStamp===stamp)return;box._evidenceStamp=stamp;
+  const opened=new Set($$('#evidence details[open]').map(el=>el.dataset.evidenceId));
+  const experiments=(value.experiments||[]).map(e=>`<article class="evidence-card"><div class="evidence-card-heading"><span class="source-id">${esc(e.id)}</span><h3>实验 · ${esc(e.hypothesis_id)}</h3><span class="evidence-kind">${e.verification?'已复核':'未复核'}</span></div><p>${e.result?`探索结果：${esc(JSON.stringify(e.result.metrics))}`:esc(e.error||'执行中')}</p>${e.verification?`<p>复核结果：${esc(JSON.stringify(e.verification.result.metrics))}</p><p>${e.verification.check.passed?'满足预注册判据':'未满足预注册判据'}</p>`:''}<details data-evidence-id="${esc(e.id)}" ${opened.has(e.id)?'open':''}><summary>查看实验代码</summary><pre>${esc(e.code||'未记录代码')}</pre></details></article>`);
+  const sources=(value.sources||[]).map(p=>{
+    const text=String(p.abstract||p.text||p.content||''),scope=p.evidence_scope||'证据范围未标注';let url='',host='';
+    try{const parsed=new URL(p.url);if(['https:','http:'].includes(parsed.protocol)){url=parsed.href;host=parsed.hostname.replace(/^www\./,'');}}catch(_){}
+    return `<article class="evidence-card"><div class="evidence-card-heading"><span class="source-id">${esc(p.id)}</span><span class="evidence-kind" title="${esc(scope)}">${esc(scope)}</span></div><h3>${esc(p.title||'未命名来源')}</h3><p class="source-excerpt">${esc(text?text.slice(0,260)+(text.length>260?'…':''):'未获取摘要或正文，当前只有元数据。')}</p>${text.length>260?`<details data-evidence-id="${esc(p.id)}" ${opened.has(p.id)?'open':''}><summary>展开完整摘录</summary><p>${esc(text)}</p></details>`:''}<div class="source-footer"><span>${esc(host||'材料来源')}</span>${url?`<a href="${esc(url)}" target="_blank" rel="noreferrer">打开来源 ↗</a>`:''}</div></article>`;
+  });
+  const assets=(value.assets||[]).map(a=>`<article class="evidence-card"><div class="evidence-card-heading"><span class="source-id">${esc(a.id)}</span><span class="evidence-kind">上传材料</span></div><h3>${esc(a.name)}</h3><p>${number(a.bytes)} 字节</p><details><summary>文件校验值</summary><pre>${esc(a.sha256||'未记录')}</pre></details></article>`);
+  const cards=[...experiments,...sources,...assets];box.innerHTML=cards.length?`<div class="research-evidence">${cards.join('')}</div>`:empty('尚无可展示的证据','可在执行记录中查看取证过程与失败原因。');
+}
 renderRecords=function(){
   if(!state.runs.length){$('#records').innerHTML=empty('没有研究记录','提交研究问题后，真实决策、实验和报告会自动保存。');return;}
   $('#records').innerHTML=`<div class="table-wrap"><table><thead><tr><th>研究问题 / 任务</th><th>方式</th><th>状态</th><th>验证</th><th>模型token</th><th>耗时 / 实验</th><th></th></tr></thead><tbody>${state.runs.map(r=>`<tr><td>${esc(r.question||r.task)}<small>${esc(r.id)}</small></td><td>${esc(modeLabel(r))}</td><td>${esc(statuses[r.status]||r.status)}</td><td>${r.domain==='research'?`${r.verified_count} 项复核`:r.domain==='operator'?'旧版算子门控':r.guard?percent(r.guard.metrics.complete_at_5):'未验收'}</td><td>${number(r.budget?.total_tokens||0)}</td><td>${time(r.budget?.elapsed_seconds??r.budget?.elapsed)} / ${r.experiment_count} 项</td><td><button class="small-link" data-research-open="${esc(r.id)}">打开 ↗</button></td></tr>`).join('')}</tbody></table></div>`;
@@ -134,34 +155,127 @@ $('#random-topic').addEventListener('click',()=>{const input=$('#brief-input');i
 statuses.done='阶段完成';
 const ROLE_LABELS={planner:'规划',experimenter:'实验',verifier:'复核',reporter:'报告'};
 function roleLabel(role){return ROLE_LABELS[role]||role||'—';}
+let sessionTab='overview', sessionViewId='', chainView={runId:'',turn:'all',status:'all',query:''};
+const TOOL_LABELS={get_memory_context:'读取研究经验',inspect:'检查材料',design_workflow:'设计研究流程',plan:'制定研究方案',literature:'检索文献',platform_search:'检索平台',web_search:'搜索网页',web_fetch:'读取网页',extract_document:'提取文档',read:'读取材料',hypothesis:'注册假设',experiment:'运行实验',verify:'复核实验',reflect:'评估结果',finish:'形成结论',invalid:'决策失败',remember_fact:'保存事实',recall_facts:'查找事实'};
+function setSessionTab(name){
+  sessionTab=['overview','execution','evidence'].includes(name)?name:'overview';
+  $$('[data-session-tab]').forEach(button=>{const selected=button.dataset.sessionTab===sessionTab;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;});
+  $$('#page-session .session-view').forEach(panel=>panel.classList.toggle('hidden',panel.id!==`session-view-${sessionTab}`));
+}
+function renderSessionLayout(value){
+  if(!value)return;
+  if(sessionViewId!==value.id){sessionViewId=value.id;setSessionTab(value.domain==='research'?'overview':'execution');$('.session-raw-records').open=value.domain!=='research';}
+  $('#session-title').textContent=value.question||value.task||'研究会话';
+  const created=new Date(value.created_at);
+  $('#session-question').textContent=[Number.isNaN(created.getTime())?'':created.toLocaleString('zh-CN',{month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}),value.turns?.length?`${value.turns.length} 轮对话`:'历史运行',value.id].filter(Boolean).join(' · ');
+  $('#session-step-count').textContent=value.steps?.length||0;
+  $('#session-evidence-count').textContent=(value.sources?.length||0)+(value.assets?.length||0)+(value.experiments?.length||0);
+  $('#session-report').href=`/api/runs/${value.id}/report`;$('#session-export').href=`/api/runs/${value.id}/export`;
+  const pending=['running','queued'].includes(value.status);$('#session-report').classList.toggle('hidden',pending||value.domain!=='research');$('#session-archive').disabled=pending;
+  if(value.domain==='research')$('#experiments').innerHTML='';
+}
 function renderWorkflow(run){
   const panel=$('#workflow-panel');
   if(!run||run.domain!=='research'||run.workflow_mode!=='plan'){panel.classList.add('hidden');panel.innerHTML='';return;}
   panel.classList.remove('hidden');
-  const stages=run.workflow?.stages||[],agents=run.agents||[],calls=run.calls||[];
+  const stages=run.workflow?.stages||[],turn=run.turns?.at(-1)?.id,agents=(run.agents||[]).filter(a=>!a.turn||!turn||a.turn===turn),calls=(run.calls||[]).filter(c=>!c.turn||!turn||c.turn===turn);
   const byAgent={};calls.forEach(c=>{if(c.agent)byAgent[c.agent]=(byAgent[c.agent]||0)+1;});
-  const planner=agents.find(a=>a.id==='g0');
-  panel.innerHTML=`<div class="panel-header"><div><div class="section-label">WORKFLOW ORCHESTRATION</div><h2>工作流编排 · 子 Agent</h2></div><span class="pill subtle">${esc(run.workflow?.source==='model'?'模型规划':'默认规划')} · ${stages.length} 阶段</span></div><div class="workflow-stages">${planner?`<article class="workflow-stage"><h3>g0 · 规划</h3><p>生成工作流：${esc(stages.map(s=>roleLabel(s.role)).join(' → ')||'—')}</p><small>${esc(planner.model||'')} · ${esc(planner.model_source||'')} · ${byAgent.g0||0} 次模型调用</small></article>`:''}${stages.map((s,i)=>{const a=agents.find(x=>x.id==='g'+(i+1))||{};return `<article class="workflow-stage${a.status==='running'?' active':''}"><h3>${esc(a.id||('g'+(i+1)))} · ${esc(roleLabel(s.role))}</h3><p>${esc(s.goal)}</p><small>${esc(a.model||'—')} · ${esc(a.model_source||'—')} · ${byAgent[a.id]||0} 次调用 · 上限 ${s.max_steps} 步</small></article>`;}).join('')}</div>${run.workflow?.reason?`<p class="form-note" style="padding:0 22px 16px">${esc(run.workflow.reason)}</p>`:''}`;
+  panel.innerHTML=`<div class="panel-header"><h2>本轮研究流程</h2><span class="workflow-source">${esc(run.workflow?.source==='agent_tool'?'Agent 设计':run.workflow?.source==='model'?'模型规划':run.workflow?.source==='model_retry'?'模型重试':'默认规划')} · ${stages.length} 阶段</span></div>${run.workflow?.reason?`<p class="workflow-reason">${esc(run.workflow.reason)}</p>`:''}<div class="workflow-stages">${stages.map((s,i)=>{const a=agents.filter(x=>x.id==='g'+(i+1)).at(-1)||{};return `<article class="workflow-stage${a.status==='running'?' active':''}"><div class="workflow-stage-heading"><span class="workflow-index">${String(i+1).padStart(2,'0')}</span><h3>${esc(roleLabel(s.role))}</h3><span class="workflow-stage-status">${esc(statuses[a.status]||'未开始')}</span></div><p>${esc(s.goal)}</p>${s.why?`<details class="stage-why"><summary>设计依据</summary><p>${esc(s.why)}</p></details>`:''}<small>${esc(a.model||'尚未调用模型')} · ${byAgent[a.id]||0} 次调用</small></article>`;}).join('')}</div>`;
 }
 function renderChain(run){
   const panel=$('#chain-panel');
   if(!run||run.domain!=='research'){panel.classList.add('hidden');return;}
   panel.classList.remove('hidden');
-  const calls=run.calls||[],steps=run.steps||[];
-  const byAgent={};calls.forEach(c=>{const key=c.agent||'main';byAgent[key]=byAgent[key]||{calls:0,tokens:0};byAgent[key].calls++;byAgent[key].tokens+=(c.input_tokens||0)+(c.output_tokens||0);});
-  const b=run.budget||{};
-  $('#chain-meta').textContent=`${steps.length} 步 · ${calls.length} 次模型调用 · ${number(b.total_tokens||0)} token`;
-  $('#chain').innerHTML=steps.length?steps.map(s=>{const m=byAgent[s.agent]||{};const secs=s.elapsed_seconds!=null?`${s.elapsed_seconds.toFixed(2)}s`:'';return `<div class="chain-step ${esc(s.status||'')}"><div class="chain-head"><span class="pill subtle">${esc(s.id)}</span><span class="chain-tool">${esc(s.tool)}</span>${s.agent?`<span class="chain-agent">${esc(s.agent)} · ${esc(roleLabel(s.role))}</span>`:''}<strong>${esc((s.reason||'').slice(0,90))}</strong><span class="chain-metrics">${s.source==='controller'?'<span>控制器</span>':''}${secs?`<span>${secs}</span>`:''}${m.tokens?`<span>${number(m.tokens)} tok</span>`:''}</span></div><div class="chain-body"><details><summary>参数与观察</summary><pre>${esc(JSON.stringify({args:s.args,observation:s.observation},null,2))}</pre></details></div></div>`;}).join(''):empty('尚无决策步骤','启动研究后，每一步工具选择、参数、观察和耗时都会出现在这里。');
+  const calls=run.calls||[],steps=run.steps||[],box=$('#chain');
+  if(chainView.runId!==run.id){chainView={runId:run.id,turn:'all',status:'all',query:''};$('#chain-status').value='all';$('#chain-search').value='';box._chainStamp='';}
+  const turnNames=[...new Set([...(run.turns||[]).map(t=>t.id),...steps.map(s=>s.turn).filter(Boolean)])];
+  const options='<option value="all">全部轮次</option>'+turnNames.map(t=>`<option value="${esc(t)}">第 ${esc(t.replace(/^t/,''))} 轮</option>`).join('');
+  if($('#chain-turn').innerHTML!==options){$('#chain-turn').innerHTML=options;$('#chain-turn').value=chainView.turn;}
+  const scopedSteps=steps.filter(s=>chainView.turn==='all'||s.turn===chainView.turn);
+  const scopedCalls=calls.filter(c=>chainView.turn==='all'||c.turn===chainView.turn);
+  const filtered=scopedSteps.filter(s=>(chainView.status==='all'||s.status===chainView.status)&&(!chainView.query||JSON.stringify(s).toLowerCase().includes(chainView.query.toLowerCase())));
+  const known=scopedCalls.reduce((total,c)=>total+(c.input_tokens||0)+(c.output_tokens||0),0),unknown=scopedCalls.reduce((total,c)=>total+(c.unknown_reserved||0),0);
+  const failures=scopedSteps.filter(s=>s.status==='failed').length;
+  $('#chain-meta').textContent=`${scopedSteps.length} 步 · ${failures} 项失败 · ${scopedCalls.length} 次模型调用`;
+  $('#chain-usage-note').textContent=`${chainView.turn==='all'?'会话累计':'本轮'}模型用量 ${number(known+unknown)} token${unknown?`（含 ${number(unknown)} 未知用量预留）`:''} · 每步耗时为工具执行时间`;
+  const stamp=JSON.stringify([run.id,chainView,filtered]);if(box._chainStamp===stamp)return;
+  const open=new Set($$('details.chain-step[open]').map(el=>el.dataset.stepKey));
+  box._chainStamp=stamp;
+  box.innerHTML=filtered.length?filtered.map((s,index)=>{
+    const key=`${s.turn||'legacy'}:${s.id}`,failed=s.status==='failed',seconds=typeof s.elapsed_seconds==='number'?s.elapsed_seconds:null;
+    const duration=s.tool==='invalid'?'未执行工具':seconds==null?'耗时未记录':`工具 ${seconds<1?seconds.toFixed(2):seconds.toFixed(1)}s`;
+    const status=failed?'失败':s.status==='completed'?'已执行':statuses[s.status]||s.status||'状态未记录';
+    const rawReason=s.reason||'',reason=/^(模型自主选择|控制器执行确定性检查|按通用研究协议进入)/.test(rawReason)?'':rawReason,error=typeof s.observation?.error==='string'?s.observation.error:'';
+    return `<details class="chain-step ${esc(s.status||'')}" data-step-key="${esc(key)}" ${open.has(key)?'open':''}><summary class="chain-summary"><span class="chain-index">${esc(s.id?.replace(/^s/,'')||String(index+1))}</span><span class="chain-content"><span class="chain-heading"><strong class="chain-tool" title="${esc(s.tool)}">${esc(TOOL_LABELS[s.tool]||s.tool)}</strong><span class="chain-status ${failed?'failed':''}">${esc(status)}</span><span class="chain-agent" title="${esc(s.agent||'')}">${esc(s.source==='controller'?'控制器':roleLabel(s.role))}</span></span><span class="chain-reason">${esc(reason)}</span>${error?`<span class="chain-error">${esc(error.slice(0,220))}</span>`:''}</span><span class="chain-duration">${esc(duration)}</span><span class="chain-chevron" aria-hidden="true">⌄</span></summary><div class="chain-body"><div class="chain-io"><section><h3>输入参数</h3><pre>${esc(JSON.stringify(s.args??{},null,2))}</pre></section><section><h3>执行结果</h3><pre>${esc(JSON.stringify(s.observation??{},null,2))}</pre></section></div><div class="chain-detail-meta"><span>${esc(s.id)}${s.turn?` · ${esc(s.turn)}`:''} · ${esc(s.tool)}</span><button type="button" class="small-link" data-chain-raw="${esc(key)}">完整步骤</button></div></div></details>`;
+  }).join(''):empty(scopedSteps.length?'没有匹配的步骤':'尚无执行记录',scopedSteps.length?'调整轮次、状态或关键词。':'开始研究后，实际工具调用会显示在这里。');
+  $$('[data-chain-raw]').forEach(button=>button.onclick=()=>showDetail('步骤记录',steps.find(s=>`${s.turn||'legacy'}:${s.id}`===button.dataset.chainRaw)));
 }
 function renderBudgetResearch(){
-  const b=run?.budget;
-  if(!b){$('#budget').innerHTML='<div class="budget-item"><div class="budget-label">等待首个模型调用</div></div>';return;}
-  const calls=run.calls||[];const out=calls.reduce((a,c)=>a+(c.output_tokens||0),0);const wall=calls.reduce((a,c)=>a+(c.wall_seconds||0),0);
-  const cached=b.cached_tokens||0;const context=(calls[calls.length-1]||{}).context_tokens||0;
+  if(!run||run.domain!=='research')return;
+  const b=run.budget,box=$('#budget');
+  if(!b){if(!box.querySelector('.budget-pending'))box.innerHTML='<div class="budget-item"><div class="budget-label">等待首个模型调用</div></div>';return;}
+  if(!box.querySelector('#budget-calls')){
+    box.innerHTML=`<div class="budget-item"><div class="budget-label">模型 token <strong id="budget-token-text">—</strong></div><div class="progress-track"><div class="progress-fill" id="budget-token-bar" style="width:0%"></div></div></div><div class="budget-item"><div class="budget-label">墙钟时间 <strong id="budget-time-text">—</strong></div><div class="progress-track"><div class="progress-fill purple" id="budget-time-bar" style="width:0%"></div></div></div><div class="budget-metrics"><div class="budget-row"><span>模型调用</span><strong id="budget-calls">—</strong></div><div class="budget-row"><span>生成速度</span><strong id="budget-speed">—</strong></div><div class="budget-row"><span>缓存命中</span><strong id="budget-cached">—</strong></div><div class="budget-row"><span>上下文用量</span><strong id="budget-context">—</strong></div><div class="budget-row"><span>云端调用</span><strong id="budget-cloud">—</strong></div><div class="budget-row"><span>工具耗时</span><strong id="budget-tools">—</strong></div></div>`;
+  }
+  const turn=run.turns?.at(-1)?.id;
+  const calls=(run.calls||[]).filter(call=>!turn||call.turn===turn);
+  const out=calls.reduce((sum,call)=>sum+(call.output_tokens||0),0);
+  const wall=calls.reduce((sum,call)=>sum+(call.wall_seconds||0),0);
+  const cached=b.cached_tokens||0;
+  const context=(calls[calls.length-1]||{}).context_tokens||0;
   const speed=wall?out/wall:0;
-  $('#budget').innerHTML=`<div class="budget-item"><div class="budget-label">模型 token <strong>${number(b.total_tokens)} / ${number(b.token_limit)}</strong></div><div class="progress-track"><div class="progress-fill" style="width:${Math.min(100,b.total_tokens/b.token_limit*100)}%"></div></div></div><div class="budget-item"><div class="budget-label">墙钟时间 <strong>${time(Math.max(b.elapsed_seconds||0,wall))} / ${time(b.seconds_limit)}</strong></div><div class="progress-track"><div class="progress-fill purple" style="width:${Math.min(100,(b.elapsed_seconds||0)/b.seconds_limit*100)}%"></div></div></div><div class="budget-footer"><span class="small-dot"></span>${b.model_calls||0} 次调用 · ${speed.toFixed(1)} tok/s · 缓存命中 ${number(cached)} · 最近上下文 ${number(context)}${b.cloud_calls?` · 云端 ${b.cloud_calls} 次`:''}</div>`;
+  const set=(id,value)=>{const el=document.getElementById(id);if(el&&el.textContent!==value)el.textContent=value;};
+  const bar=(id,percent)=>{const el=document.getElementById(id);if(!el)return;const width=Math.min(100,Math.max(0,percent))+'%';if(el.style.width!==width)el.style.width=width;};
+  set('budget-token-text',`${number(b.total_tokens)} / ${number(b.token_limit)}`);
+  bar('budget-token-bar',b.total_tokens/b.token_limit*100);
+  set('budget-time-text',`${time(Math.max(b.elapsed_seconds||0,wall))} / ${time(b.seconds_limit)}`);
+  bar('budget-time-bar',(b.elapsed_seconds||0)/b.seconds_limit*100);
+  set('budget-calls',`${b.model_calls||0} 次`);
+  set('budget-speed',`${speed.toFixed(1)} tok/s`);
+  set('budget-cached',`${number(cached)} token`);
+  set('budget-context',calls.at(-1)?.context_tokens==null?'未返回':`${number(context)} token`);
+  set('budget-cloud',`${b.cloud_calls||0} 次`);
+  const toolSeconds=(run.steps||[]).filter(step=>!turn||step.turn===turn).reduce((sum,step)=>sum+(step.elapsed_seconds||0),0);
+  set('budget-tools',`${toolSeconds.toFixed(2)} s`);
 }
 const baseResearchRun=renderRun;
-renderRun=function(){baseResearchRun();renderWorkflow(run);renderChain(run);renderBudgetResearch();};
+renderRun=function(){baseResearchRun();renderWorkflow(run);renderChain(run);};
 const baseBudget=renderBudget;
 renderBudget=function(){if(run&&run.domain==='research'){renderBudgetResearch();return;}baseBudget();};
+
+/* Multi-turn: the session page shows every turn and lets the user continue. */
+function renderSessionTurns(run){
+  const box=$('#session-turns');
+  if(!box)return;
+  renderSessionLayout(run);
+  if(!run||run.domain!=='research'){box.innerHTML='';return;}
+  const turns=run.turns?.length?run.turns:[{question:run.question,status:run.status,conclusion:run.report?.conclusion||run.stop_reason||run.error||''}];
+  const stamp=JSON.stringify([run.id,turns]);if(box._turnStamp===stamp)return;
+  const historyOpen=box.querySelector('.session-turn-history')?.open;box._turnStamp=stamp;
+  const card=(turn,index)=>{
+    const status=statuses[turn.status]||turn.status||'',question=index>0||turn.question!==run.question;
+    return `<article class="turn-block">${question?`<div class="turn-question"><span class="turn-role">追问</span><p>${esc(turn.question||'')}</p></div>`:''}<div class="turn-answer"><div class="turn-answer-heading"><strong>${index===turns.length-1?'研究结果':'历史结果'}</strong><span>第 ${index+1} 轮</span><span class="pill subtle">${esc(status)}</span></div><p class="${turn.conclusion?'':'muted'}">${esc(turn.conclusion||(['running','queued'].includes(turn.status)?'研究正在进行，执行记录中会显示最新步骤。':'本轮尚未形成结论。'))}</p></div></article>`;
+  };
+  box.innerHTML=(turns.length>1?`<details class="session-turn-history" ${historyOpen?'open':''}><summary>此前 ${turns.length-1} 轮对话</summary>${turns.slice(0,-1).map(card).join('')}</details>`:'')+card(turns.at(-1),turns.length-1);
+}
+const baseTurnsRun=renderRun;
+renderRun=function(){baseTurnsRun();renderSessionTurns(run);};
+$$('[data-session-tab]').forEach(button=>{
+  button.addEventListener('click',()=>setSessionTab(button.dataset.sessionTab));
+  button.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const tabs=$$('[data-session-tab]');let index=tabs.indexOf(button);index=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;setSessionTab(tabs[index].dataset.sessionTab);tabs[index].focus();});
+});
+$('#chain-turn').addEventListener('change',event=>{chainView.turn=event.target.value;renderChain(run);});
+$('#chain-status').addEventListener('change',event=>{chainView.status=event.target.value;renderChain(run);});
+$('#chain-search').addEventListener('input',event=>{chainView.query=event.target.value.trim();renderChain(run);});
+$('#followup-send')?.addEventListener('click',async()=>{
+  const question=$('#followup-input').value.trim();
+  if(!run){toast('先打开一个研究会话');return;}
+  if(question.length<8){toast('追问至少 8 个字符');return;}
+  const button=$('#followup-send');button.disabled=true;
+  try{
+    await api(`/api/runs/${run.id}/continue`,{question});
+    $('#followup-input').value='';
+    toast('已在本会话中开始下一轮研究。');
+    await refresh(true);
+  }catch(error){toast(error.message);}finally{button.disabled=false;}
+});

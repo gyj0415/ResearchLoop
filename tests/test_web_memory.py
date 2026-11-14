@@ -84,10 +84,15 @@ class WorkflowTests(unittest.TestCase):
         stages = workflow.validate(workflow.default_stages())
         self.assertEqual([stage["role"] for stage in stages][1], "experimenter")
 
-    def test_workflow_requires_an_experiment_stage(self):
-        with self.assertRaises(ValueError):
-            workflow.validate([{"role": "planner", "goal": "只做规划"},
-                               {"role": "reporter", "goal": "直接报告"}])
+    def test_qualitative_workflow_without_experiment_is_allowed(self):
+        stages = workflow.validate([{"role": "planner", "goal": "检索并评估证据"},
+                                    {"role": "reporter", "goal": "按证据形成结论"}])
+        self.assertEqual([stage["role"] for stage in stages], ["planner", "reporter"])
+
+    def test_stage_reasons_are_preserved(self):
+        stages = workflow.validate([{"role": "planner", "goal": "规划", "why": "先确认证据"},
+                                    {"role": "reporter", "goal": "报告", "why": "汇总复核结果"}])
+        self.assertEqual(stages[0]["why"], "先确认证据")
 
     def test_unknown_role_is_rejected(self):
         with self.assertRaises(ValueError):

@@ -20,14 +20,22 @@ def web_search(engine, args):
                               endpoint=config.get("search_endpoint"), api_key=config.get("search_api_key"),
                               max_results=args.get("max_results") or config.get("max_results") or 5,
                               recency=args.get("recency") or "any")
+    seen = {str(source.get("url") or "") for source in engine.run["sources"]}
+    added = []
     for row in result["results"]:
+        url = str(row.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
         row["id"] = f"p{len(engine.run['sources']) + 1}"
         row.setdefault("abstract", row.get("snippet", ""))
-        row["evidence_scope"] = "网页搜索摘要，不是论文结论"
+        row["evidence_scope"] = f"网页搜索摘要（{result['provider']}），媒体/平台内容，不是同行评议"
         engine.run["sources"].append(row)
+        added.append(row)
     engine.run["evidence_collected"] = True
-    return {"provider": result["provider"], "query": result["query"], "results": result["results"],
-            "note": "搜索摘要只作线索；需要正文时用 web_fetch 读取具体 URL"}
+    return {"provider": result["provider"], "query": result["query"], "added": len(added),
+            "skipped_duplicates": len(result["results"]) - len(added), "results": added,
+            "note": "搜索摘要只作线索；需要正文时用 web_fetch 读取具体 URL。换关键词可继续检索，重复 URL 会被跳过。"}
 
 
 def web_fetch(engine, args):
@@ -35,13 +43,16 @@ def web_fetch(engine, args):
     if not config.get("enabled"):
         raise ValueError("联网工具未启用：请先在设置中启用并配置搜索服务")
     page = webaccess.fetch(args.get("url"), max_chars=args.get("max_chars") or config.get("fetch_max_chars") or 6000)
+    note = ""
+    if len(page["content"]) < 200:
+        note = "正文很短：页面可能需要登录或由脚本渲染，未获取到主要内容"
     entry = {"id": f"p{len(engine.run['sources']) + 1}", "title": page["title"], "url": page["url"],
              "abstract": page["content"][:1800], "evidence_scope": "网页正文",
-             "fetched_at": page["fetched_at"]}
+             "fetched_at": page["fetched_at"], "content_chars": len(page["content"])}
     engine.run["sources"].append(entry)
     engine.run["evidence_collected"] = True
     return {"id": entry["id"], "url": page["url"], "title": page["title"],
-            "chars": len(page["content"]), "truncated": page["truncated"]}
+            "chars": len(page["content"]), "truncated": page["truncated"], "note": note}
 
 
 def remember_fact(engine, args):
@@ -64,6 +75,20 @@ def get_memory_context(engine, args):
     return engine.run["memory_context"]
 
 
+def platform_search(engine, args):
+    from .. import platforms
+    platform = str(args.get("platform") or "").strip().lower()
+    query = str(args.get("query") or "").strip()
+    result = platforms.search(platform, query, limit=args.get("limit") or 5)
+    for row in result["results"]:
+        row["id"] = f"p{len(engine.run['sources']) + 1}"
+        row["evidence_scope"] = f"{result['label']}平台检索结果（平台内容，不是同行评议）"
+        row.setdefault("abstract", row.get("snippet", ""))
+        engine.run["sources"].append(row)
+    engine.run["evidence_collected"] = True
+    return result
+
+
 registry.register_tool("web_search", web_search,
                        description="搜索外部网页信息，适合最新消息、陌生实体或需要来源核实时使用。",
                        arguments={"query": "搜索关键词", "reason": "为什么需要搜索",
@@ -79,3 +104,9 @@ registry.register_tool("remember_fact", remember_fact,
 registry.register_tool("get_memory_context", get_memory_context,
                        description="按查询召回事实记忆，返回适用条件与证据来源。",
                        arguments={"query": "检索文本"}, required=[])
+
+registry.register_tool("platform_search", platform_search,
+                       description="按平台检索（Bilibili、小红书、贴吧、微博、抖音、知乎）；公开接口优先，需登录的平台走站内限定搜索。",
+                       arguments={"platform": "bilibili/xiaohongshu/tieba/weibo/douyin/zhihu",
+                                  "query": "检索关键词", "reason": "为什么需要该平台证据", "limit": 5},
+                       required=["platform", "query", "reason"])

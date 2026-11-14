@@ -57,6 +57,7 @@ def source_hash():
 
 
 CLOUD_DEFAULTS = {"enabled": False, "base_url": "", "model": "", "api_key": ""}
+LIMIT_DEFAULTS = {"max_tokens": 400000, "max_seconds": 7200, "max_steps": 40}
 WEB_DEFAULTS = {"enabled": False, "search_provider": "searxng", "search_endpoint": "",
                 "search_api_key": "", "max_results": 5, "fetch_max_chars": 6000}
 
@@ -65,10 +66,12 @@ def settings():
     saved = dict(read_json(ROOT / "config.json", {}) or {})
     cloud = {**CLOUD_DEFAULTS, **(saved.pop("cloud", None) or {})}
     web = {**WEB_DEFAULTS, **(saved.pop("web", None) or {})}
+    limits = {**LIMIT_DEFAULTS, **(saved.pop("limits", None) or {})}
     value = {"ollama_url": "http://127.0.0.1:11434", "model": "deepseek-r1:8b",
              "model_source": "local", **saved}
     value["cloud"] = cloud
     value["web"] = web
+    value["limits"] = limits
     return value
 
 
@@ -83,8 +86,14 @@ def masked_settings():
 
 
 def list_runs():
-    return sorted([read_json(p) for p in RUNS.glob("*/run.json")],
-                  key=lambda r: r["created_at"], reverse=True)
+    runs = []
+    for path in RUNS.glob("*/run.json"):
+        if path.parent.name.startswith("."):
+            continue
+        run = read_json(path)
+        if run:
+            runs.append(run)
+    return sorted(runs, key=lambda r: r["created_at"], reverse=True)
 
 
 def run_path(run_id):
@@ -94,6 +103,32 @@ def run_path(run_id):
     if not path.exists():
         raise ValueError("运行不存在")
     return path
+
+
+
+
+def archive_run(run_id, archived=True):
+    """Archive hides a session from the sidebar without touching its records."""
+    path = run_path(run_id)
+    run = read_json(path)
+    run["archived"] = bool(archived)
+    run["archived_at"] = now() if archived else None
+    write_json(path, run)
+    return run
+
+
+def delete_run(run_id):
+    """Move an archived session folder to runs/.trash instead of destroying evidence."""
+    run = read_json(run_path(run_id))
+    if not run.get("archived"):
+        raise ValueError("只能删除已归档的会话；请先归档")
+    trash = RUNS / ".trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    target = trash / run_id
+    if target.exists():
+        raise ValueError("回收目录已有同名会话，未覆盖")
+    os.replace(RUNS / run_id, target)
+    return {"id": run_id, "trash": str(target)}
 
 
 def memory_state():

@@ -26,19 +26,49 @@ TOOLS = [
 ]
 
 
+def openalex_abstract(doi, timeout=4):
+    """Rebuild an abstract from OpenAlex when Crossref only returned metadata."""
+    if not doi:
+        return ""
+    url = "https://api.openalex.org/works/https://doi.org/" + urllib.parse.quote(str(doi), safe="")
+    request = urllib.request.Request(url, headers={"User-Agent": "ResearchLoop/0.4 (local research prototype)"})
+    with urllib.request.urlopen(request, timeout=max(1, min(10, timeout))) as response:
+        payload = json.load(response)
+    inverted = payload.get("abstract_inverted_index") or {}
+    positions = {}
+    for word, indexes in inverted.items():
+        for index in indexes:
+            positions[int(index)] = word
+    if not positions:
+        return ""
+    return " ".join(positions[index] for index in sorted(positions))[:1800]
+
+
 def literature(query, timeout=15):
     if not isinstance(query, str) or not query.strip():
         raise ValueError("需要检索关键词")
     url = "https://api.crossref.org/works?" + urllib.parse.urlencode({"query.bibliographic": query[:250], "rows": 4})
-    request = urllib.request.Request(url, headers={"User-Agent": "ResearchLoop/0.3 (local research prototype)"})
+    request = urllib.request.Request(url, headers={"User-Agent": "ResearchLoop/0.4 (local research prototype)"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.load(response)
     rows = []
     for item in payload.get("message", {}).get("items", []):
-        abstract = html.unescape(re.sub("<[^>]+>", " ", item.get("abstract", "")))
+        abstract = re.sub("<[^>]+>", " ", html.unescape(item.get("abstract", "")))
         rows.append({"title": (item.get("title") or [""])[0], "doi": item.get("DOI"),
                      "url": item.get("URL"), "abstract": abstract[:1800],
                      "evidence_scope": "摘要" if abstract else "只有元数据，不是结论证据"})
+    # Crossref often omits abstracts; try OpenAlex for the first few metadata-only records.
+    enriched = 0
+    for row in rows:
+        if enriched >= 4 or row["abstract"]:
+            continue
+        try:
+            abstract = openalex_abstract(row.get("doi"), timeout=4)
+        except Exception:
+            continue
+        if abstract:
+            row["abstract"], row["evidence_scope"] = abstract, "摘要（OpenAlex）"
+            enriched += 1
     return rows
 
 

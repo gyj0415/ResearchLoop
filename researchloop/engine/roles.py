@@ -8,7 +8,7 @@ ROLES = {
     "planner": {
         "label": "规划",
         "goal": "检查材料与文献，判断可行性，给出可执行工作流并注册可证伪假设",
-        "tools": ["inspect", "literature", "read", "read_docx", "read_pptx", "read_pdf",
+        "tools": ["design_workflow", "inspect", "literature", "platform_search", "read", "read_docx", "read_pptx", "read_pdf",
                   "plan", "hypothesis", "web_search", "web_fetch", "get_memory_context", "finish"],
         "system": "你是科研任务的规划者。先检查材料与文献是否支持这个问题，判断可行性并写出研究设计，再注册可证伪假设。不要直接下结论，也不要在没有证据时声称完成。",
     },

@@ -22,11 +22,11 @@ CREATE TABLE IF NOT EXISTS sessions(
 CREATE TABLE IF NOT EXISTS calls(
     session_id TEXT, idx INTEGER, at TEXT, purpose TEXT, model TEXT, source TEXT,
     input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER,
-    context_tokens INTEGER, wall_seconds REAL, tok_per_second REAL, cloud INTEGER,
+    context_tokens INTEGER, wall_seconds REAL, tok_per_second REAL, cloud INTEGER, turn TEXT,
     PRIMARY KEY(session_id, idx));
 CREATE TABLE IF NOT EXISTS steps(
     session_id TEXT, step_id TEXT, at TEXT, tool TEXT, status TEXT, reason TEXT,
-    args_json TEXT, observation_json TEXT, elapsed_seconds REAL, agent TEXT, role TEXT,
+    args_json TEXT, observation_json TEXT, elapsed_seconds REAL, agent TEXT, role TEXT, turn TEXT,
     PRIMARY KEY(session_id, step_id));
 CREATE TABLE IF NOT EXISTS agents(
     session_id TEXT, agent_id TEXT, role TEXT, goal TEXT, model TEXT, model_source TEXT,
@@ -78,6 +78,8 @@ def init():
             connection.executescript(SCHEMA)
             _ensure_column(connection, "steps", "agent", "TEXT")
             _ensure_column(connection, "steps", "role", "TEXT")
+            _ensure_column(connection, "steps", "turn", "TEXT")
+            _ensure_column(connection, "calls", "turn", "TEXT")
             connection.commit()
         finally:
             connection.close()
@@ -132,20 +134,20 @@ def sync_run(run):
             json.dumps(run.get("budget"), ensure_ascii=False), json.dumps(metrics, ensure_ascii=False)))
     for index, call in enumerate(run.get("calls") or []):
         _write("""INSERT OR REPLACE INTO calls(session_id, idx, at, purpose, model, source, input_tokens,
-                  output_tokens, cached_tokens, context_tokens, wall_seconds, tok_per_second, cloud)
-                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  output_tokens, cached_tokens, context_tokens, wall_seconds, tok_per_second, cloud, turn)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                (session, index, run.get("updated_at") or run.get("created_at"), call.get("purpose"),
                 call.get("model"), call.get("source", "ollama"), int(call.get("input_tokens") or 0),
                 int(call.get("output_tokens") or 0), int(call.get("cached_tokens") or 0),
                 int(call.get("context_tokens") or 0), float(call.get("wall_seconds") or 0),
-                call.get("tok_per_second"), 1 if call.get("cloud") else 0))
+                call.get("tok_per_second"), 1 if call.get("cloud") else 0, call.get("turn")))
     for step in run.get("steps") or []:
         _write("""INSERT OR REPLACE INTO steps(session_id, step_id, at, tool, status, reason, args_json,
-                  observation_json, elapsed_seconds, agent, role) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                  observation_json, elapsed_seconds, agent, role, turn) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                (session, step.get("id"), step.get("at"), step.get("tool"), step.get("status"),
                 step.get("reason"), json.dumps(step.get("args"), ensure_ascii=False),
                 json.dumps(step.get("observation"), ensure_ascii=False),
-                float(step.get("elapsed_seconds") or 0), step.get("agent"), step.get("role")))
+                float(step.get("elapsed_seconds") or 0), step.get("agent"), step.get("role"), step.get("turn")))
     for agent in run.get("agents") or []:
         _write("""INSERT OR REPLACE INTO agents(session_id, agent_id, role, goal, model, model_source, status, steps_json)
                   VALUES(?,?,?,?,?,?,?,?)""",

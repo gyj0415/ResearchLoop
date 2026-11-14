@@ -17,7 +17,10 @@ const paths = {
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/>',
   compare:'<path d="M5 4v16M19 4v16M5 7h10m-3-3 3 3-3 3M19 17H9m3-3-3 3 3 3"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
-  menu:'<path d="M4 7h16M4 12h16M4 17h16"/>'
+  menu:'<path d="M4 7h16M4 12h16M4 17h16"/>',
+  archive:'<path d="M4 5h16v4H4zM6 9v10h12V9M10 13h4"/>',
+  trash:'<path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13M10 11v6M14 11v6"/>',
+  restore:'<path d="M4 12a8 8 0 1 0 3-6.2M4 4v5h5"/>'
 };
 function icon(name) { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.info}</svg>`; }
 $$('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
@@ -49,10 +52,10 @@ function toast(message) {
 }
 function empty(title, message, mark='↻') { return `<div class="empty-state"><div class="empty-mark">${mark}</div><strong>${esc(title)}</strong><p>${esc(message)}</p></div>`; }
 function goto(name) {
-  page = ['workspace','records','memory','data','logs'].includes(name) ? name : 'workspace';
+  page = ['workspace','session','records','memory','data','logs','archive'].includes(name) ? name : 'workspace';
   $$('.page').forEach(el => el.classList.toggle('hidden',el.id !== `page-${page}`));
   $$('.nav-item').forEach(el => el.classList.toggle('active',el.dataset.page === page));
-  $('#page-label').textContent = {workspace:'研究工作台',records:'运行记录',memory:'研究经验',data:'材料与工具',logs:'日志'}[page];
+  $('#page-label').textContent = {workspace:'研究工作台',session:'研究对话',records:'运行记录',memory:'研究经验',data:'材料与工具',logs:'日志',archive:'归档会话'}[page];
   history.replaceState(null,'',`#${page}`);
   if (page === 'data') renderFinal();
   if (page === 'logs') renderLogs();
@@ -243,7 +246,7 @@ function renderDataLegacy() {
   $('#prepare-button').disabled=!!d||!!state.active_run||!!state.preparing;
   $('#prepare-button').textContent=d?'公开数据已就绪':state.preparing?'数据准备中…':'准备公开数据';
   if(!d){$('#data-content').innerHTML=empty('先建立可检查的研究环境','下载 SciFact 原始数据、许可文件，并冻结按文档隔离的数据划分。');return;}
-  $('#data-content').innerHTML=`<div class="data-grid"><article class="panel data-card"><div class="section-label">SOURCE TASK A</div><h2>积累研究经验</h2><div class="data-number">${d.splits.A.explore} <span class="body-muted">+ ${d.splits.A.guard}</span></div><p>探索题 + 独立验收题。只有探索反馈进入迭代规划，验收后不能继续修改本轮配置。</p></article><article class="panel data-card"><div class="section-label">TRANSFER TASK B</div><h2>检验经验迁移</h2><div class="data-number">${d.splits.B.explore} <span class="body-muted">+ ${d.splits.B.guard}</span></div><p>新问题与新证据文档。冷启动和带经验运行使用同一任务，跨运行不继承结果缓存。</p></article><article class="panel data-card"><div class="section-label">SEALED FINAL TEST</div><h2>最终统一验收</h2><div class="data-number">${d.splits.test}</div><p>从官方开发集保留。与 A / B 的标注证据文档分离，所有候选冻结后一次性开放结果。</p></article></div><section class="panel data-metadata"><h2>SciFact · 固定句子级证据</h2><p>${number(d.corpus_count)} 篇摘要；返回最多 5 个唯一原始句子。主指标为完整命中任一可接受证据集合的比例，辅助报告最佳集合覆盖率与 nDCG@5。仅纳入有标注证据的主张，未标注内容不等于已证明不相关。</p><p>标注：CC BY 4.0 · 摘要：ODC-By 1.0。<a href="https://github.com/allenai/scifact/blob/master/LICENSE.md" target="_blank" rel="noreferrer">查看原始许可 ↗</a></p><div class="section-label">SOURCE ARCHIVE SHA256</div><code>${esc(d.sha256)}</code></section>`;
+  $('#data-content').innerHTML=`<div class="data-grid"><article class="panel data-card"><h2>积累研究经验</h2><div class="data-number">${d.splits.A.explore} <span class="body-muted">+ ${d.splits.A.guard}</span></div><p>探索题 + 独立验收题。只有探索反馈进入迭代规划，验收后不能继续修改本轮配置。</p></article><article class="panel data-card"><h2>检验经验迁移</h2><div class="data-number">${d.splits.B.explore} <span class="body-muted">+ ${d.splits.B.guard}</span></div><p>新问题与新证据文档。冷启动和带经验运行使用同一任务，跨运行不继承结果缓存。</p></article><article class="panel data-card"><h2>最终统一验收</h2><div class="data-number">${d.splits.test}</div><p>从官方开发集保留。与 A / B 的标注证据文档分离，所有候选冻结后一次性开放结果。</p></article></div><section class="panel data-metadata"><h2>SciFact · 固定句子级证据</h2><p>${number(d.corpus_count)} 篇摘要；返回最多 5 个唯一原始句子。主指标为完整命中任一可接受证据集合的比例，辅助报告最佳集合覆盖率与 nDCG@5。仅纳入有标注证据的主张，未标注内容不等于已证明不相关。</p><p>标注：CC BY 4.0 · 摘要：ODC-By 1.0。<a href="https://github.com/allenai/scifact/blob/master/LICENSE.md" target="_blank" rel="noreferrer">查看原始许可 ↗</a></p><code>${esc(d.sha256)}</code></section>`;
   $('#finalize-button').disabled=!!state.active_run||state.final_test_revealed||!state.runs.some(r=>r.status==='completed');
   $('#finalize-button').textContent=state.final_test_revealed?'已冻结，结果只读':'冻结并统一验收';
 }
@@ -259,7 +262,7 @@ function renderDiagnostics(){
   const counts=d.failure_counts,groups=d.feature_groups;
   const items=[['初始召回缺失',counts.recall||0,'标注证据句未进入初始前 50'],['排序不足',counts.ranking||0,'证据集合在初始前 50，最终前 5 不完整'],['部分召回',counts.partial_recall||0,'初始前 50 仅包含部分证据'],['可观察的约束',`${groups.has_negation?.count||0} / ${groups.has_number?.count||0}`,'含否定词问题 / 含数值问题']];
   const m=run.memory_selection,c=run.evaluation_counts,f=run.candidate_filter;
-  panel.innerHTML=`<div class="panel-header"><div><div class="section-label">DIAGNOSE BEFORE EXPERIMENTING</div><h2>基线失败诊断 <span class="counter">开发数据 ${d.count} 题</span></h2></div><span class="pill subtle">诊断用金标 · 策略门控不用金标</span></div><div class="diagnostic-grid">${items.map(([label,value,note])=>`<div><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join('')}</div><div class="diagnostic-notes">${m?`<p><strong>经验检查：</strong>${esc(m.reason)}${m.profile_distance!=null?` · 特征距离 ${m.profile_distance}`:''}</p>`:''}${f?`<p>当前候选生成 ${f.generated} 项，移除等价或不触发干预 ${f.equivalent_or_inactive_removed} 项，保留 ${f.remaining} 项。此规则为所有对照组共用。</p>`:''}${c?`<p>评估账本：${c.screen} 次开发筛选 / ${c.full} 次完整探索 / ${c.guard} 次验收；同轮复用 ${c.reused_rows} 条已测结果。筛选结果不进入完整探索曲线。</p>`:''}</div>`;
+  panel.innerHTML=`<div class="panel-header"><div><h2>基线失败诊断 <span class="counter">开发数据 ${d.count} 题</span></h2></div><span class="pill subtle">诊断用金标 · 策略门控不用金标</span></div><div class="diagnostic-grid">${items.map(([label,value,note])=>`<div><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join('')}</div><div class="diagnostic-notes">${m?`<p><strong>经验检查：</strong>${esc(m.reason)}${m.profile_distance!=null?` · 特征距离 ${m.profile_distance}`:''}</p>`:''}${f?`<p>当前候选生成 ${f.generated} 项，移除等价或不触发干预 ${f.equivalent_or_inactive_removed} 项，保留 ${f.remaining} 项。此规则为所有对照组共用。</p>`:''}${c?`<p>评估账本：${c.screen} 次开发筛选 / ${c.full} 次完整探索 / ${c.guard} 次验收；同轮复用 ${c.reused_rows} 条已测结果。筛选结果不进入完整探索曲线。</p>`:''}</div>`;
 }
 function renderMemory(){
   renderMemoryLegacy();const versions=[...state.memory.versions].reverse();
@@ -268,11 +271,11 @@ function renderMemory(){
 function renderData(){
   renderDataLegacy();if(!state.dataset||!state.research_tasks?.C)return;
   const tasks=state.research_tasks;
-  $('#data-content .data-grid').innerHTML=['C','D'].map(name=>`<article class="panel data-card"><div class="section-label">${name==='C'?'SOURCE':'TRANSFER'} TASK ${name}</div><h2>${name==='C'?'诊断与经验来源':'新任务配对验证'}</h2><div class="data-number">${tasks[name].explore} <span class="body-muted">+ ${tasks[name].guard}</span></div><p>探索 + 一次独立验收。固定 ${tasks[name].screen} 道开发筛选题。${state.task_exposure?.[name]?'已有真实运行，后续分析时属于已见任务。':'尚未运行；不按检索效果选择问题。'}</p></article>`).join('')+`<article class="panel data-card"><div class="section-label">SEALED FINAL TEST</div><h2>最终统一验收</h2><div class="data-number">${state.dataset.splits.test}</div><p>保留测试继续封存。旧 A/B 仅作开发诊断；E/F 各 24+12 题预留，未开放指标。</p></article>`;
+  $('#data-content .data-grid').innerHTML=['C','D'].map(name=>`<article class="panel data-card"><h2>${name==='C'?'诊断与经验来源':'新任务配对验证'}</h2><div class="data-number">${tasks[name].explore} <span class="body-muted">+ ${tasks[name].guard}</span></div><p>探索 + 一次独立验收。固定 ${tasks[name].screen} 道开发筛选题。${state.task_exposure?.[name]?'已有真实运行，后续分析时属于已见任务。':'尚未运行；不按检索效果选择问题。'}</p></article>`).join('')+`<article class="panel data-card"><h2>最终统一验收</h2><div class="data-number">${state.dataset.splits.test}</div><p>保留测试继续封存。旧 A/B 仅作开发诊断；E/F 各 24+12 题预留，未开放指标。</p></article>`;
   const note=document.createElement('p');note.className='task-registry-note';note.textContent=`任务注册哈希：${state.task_registry_hash}。按证据文档连通分组排除旧任务与最终测试；任务清单及后续暴露记录见本地 docs/experiments。`;
   $('#data-content .data-metadata').append(note);
 }
-async function selectRun(id){selectedId=id;localStorage.setItem('rl-selected-run',id);evidenceKey='';evidenceClaim='';evidenceExperiment='';goto('workspace');await refresh(true);}
+async function selectRun(id){selectedId=id;localStorage.setItem('rl-selected-run',id);evidenceKey='';evidenceClaim='';evidenceExperiment='';goto('session');await refresh(true);}
 $('#run-select').addEventListener('change',e=>selectRun(e.target.value));
 $$('.new-run').forEach(el=>el.addEventListener('click',()=>{document.getElementById('composer').scrollIntoView({block:'center'});$('#brief-input').focus();}));
 function openRetrievalDialog(){
@@ -286,14 +289,14 @@ $('#mode-input').addEventListener('change',updateMode);
 $('#run-form [name=task]').addEventListener('change',updateMode);
 $('#run-form').addEventListener('submit',async e=>{e.preventDefault();const form=new FormData(e.target);const body=Object.fromEntries(form);body.use_memory=$('#memory-input').checked;for(const k of ['max_experiments','token_limit','seconds_limit','seed'])body[k]=Number(body[k]);body.memory_version=state.memory.active;const button=$('#run-form [type=submit]');button.disabled=true;try{const created=await api('/api/runs',body);$('#run-dialog').close();await selectRun(created.id);toast('研究已启动，结果和全部调用消耗将自动保存。');}catch(error){toast(error.message);}finally{button.disabled=false;}});
 async function checkModels(){const badge=$('#ollama-status');badge.innerHTML='<span class="loader"></span>检查 Ollama…';try{modelStatus=await api('/api/ollama');badge.classList.toggle('offline',!modelStatus.available);badge.innerHTML=`<span class="small-dot"></span>${modelStatus.available?'Ollama 已连接':'Ollama 未连接'}`;$('#model-options').innerHTML=modelStatus.models.filter(m=>!m.name.toLowerCase().includes('cloud')).map(m=>`<option value="${esc(m.name)}">${esc(m.details?.parameter_size||'')}</option>`).join('');const cloud=state?.settings?.cloud||{};$('#model-details').textContent=modelStatus.available?`检测到 ${modelStatus.models.length} 个本地模型。当前本地默认 ${state?.settings.model||'未设置'}。${cloud.enabled?`云端已启用：${cloud.model}`:'云端未启用。'}`:`本地服务未连接：${modelStatus.error}。请运行 ollama serve，再检测服务。`;}catch(e){badge.textContent='连接检测失败';toast(e.message);}}
-function fillCloudSettings(){const c=state?.settings?.cloud||{},w=state?.settings?.web||{},form=$('#settings-form');$('#model-source').value=state?.settings?.model_source||'local';$('#cloud-enabled').checked=!!c.enabled;form.querySelector('[name=cloud_base_url]').value=c.base_url||'';form.querySelector('[name=cloud_model]').value=c.model||'';form.querySelector('[name=cloud_api_key]').value='';$('#cloud-details').textContent=c.api_key_set?'已保存 API Key（页面不回显明文）。':'尚未保存 API Key；启用云端模型前需填写。';$('#web-enabled').checked=!!w.enabled;form.querySelector('[name=web_provider]').value=w.search_provider||'searxng';form.querySelector('[name=web_endpoint]').value=w.search_endpoint||'';form.querySelector('[name=web_api_key]').value='';form.querySelector('[name=web_max_results]').value=w.max_results||5;$('#web-details').textContent=w.search_api_key_set?'已保存搜索 API Key。':'未保存搜索 API Key（SearXNG 可不需要）。';}
+function fillCloudSettings(){const c=state?.settings?.cloud||{},w=state?.settings?.web||{},form=$('#settings-form');$('#model-source').value=state?.settings?.model_source||'local';$('#cloud-enabled').checked=!!c.enabled;form.querySelector('[name=cloud_base_url]').value=c.base_url||'';form.querySelector('[name=cloud_model]').value=c.model||'';form.querySelector('[name=cloud_api_key]').value='';$('#cloud-details').textContent=c.api_key_set?'已保存 API Key（页面不回显明文）。':'尚未保存 API Key；启用云端模型前需填写。';$('#web-enabled').checked=!!w.enabled;form.querySelector('[name=web_provider]').value=w.search_provider||'searxng';form.querySelector('[name=web_endpoint]').value=w.search_endpoint||'';form.querySelector('[name=web_api_key]').value='';form.querySelector('[name=web_max_results]').value=w.max_results||5;const lim=state?.settings?.limits||{};form.querySelector('[name=limit_tokens]').value=lim.max_tokens||400000;form.querySelector('[name=limit_seconds]').value=lim.max_seconds||7200;form.querySelector('[name=limit_steps]').value=lim.max_steps||40;$('#web-details').textContent=w.search_api_key_set?'已保存搜索 API Key。':'未保存搜索 API Key（SearXNG 可不需要）。';}
 let roleCatalog=[];
 async function renderRoleModels(){const saved=state?.settings?.roles||{};if(!roleCatalog.length){try{const data=await api('/api/roles');roleCatalog=data.roles||[];}catch(e){roleCatalog=[];}}const cloud=state?.settings?.cloud||{};$('#role-models').innerHTML=roleCatalog.map(r=>{const c=saved[r.role]||{};return `<div class="role-row" data-role="${esc(r.role)}"><span>${esc(r.label)}</span><select><option value="">沿用本轮模型</option><option value="local">本地</option><option value="cloud">云端</option></select><input placeholder="${esc(cloud.enabled?(cloud.model||'云端模型'):'模型名')}" value="${esc(c.model||'')}"></div>`;}).join('');document.querySelectorAll('#role-models .role-row').forEach(row=>{const conf=saved[row.dataset.role]||{};row.querySelector('select').value=conf.model_source||'';});}
 function openSettings(){if(state){$('#settings-form [name=ollama_url]').value=state.settings.ollama_url;$('#model-name').value=state.settings.model;fillCloudSettings();}$('#settings-dialog').showModal();checkModels();renderRoleModels();}
 $('#settings-button').addEventListener('click',openSettings);$('#settings-shortcut').addEventListener('click',openSettings);$('#refresh-models').addEventListener('click',checkModels);
 $('#check-cloud').addEventListener('click',async()=>{const form=$('#settings-form'),note=$('#cloud-details');note.textContent='检测已保存的云端配置…';try{const result=await api('/api/cloud/test',{cloud:{base_url:form.querySelector('[name=cloud_base_url]').value,api_key:form.querySelector('[name=cloud_api_key]').value}});note.textContent=result.available?`云端已连接，可用模型 ${result.models.length} 个${result.models[0]?`（如 ${result.models[0].name}）`:''}。`:`云端未连接：${result.error}`;}catch(error){note.textContent='检测失败：'+error.message;}});
 $('#check-web').addEventListener('click',async()=>{const form=$('#settings-form'),note=$('#web-details');note.textContent='检测已保存的联网搜索配置…';try{const result=await api('/api/web/test',{query:'research agent evaluation'});note.textContent=`${result.provider} 可用，返回 ${result.results.length} 条结果${result.results[0]?`（如 ${result.results[0].title||result.results[0].url}）`:''}。`;}catch(error){note.textContent='联网检测失败：'+error.message;}});
-$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const raw=Object.fromEntries(new FormData(e.target));const roles={};document.querySelectorAll('#role-models .role-row').forEach(row=>{const source=row.querySelector('select').value;if(source)roles[row.dataset.role]={model_source:source,model:row.querySelector('input').value.trim()};});try{const body={ollama_url:raw.ollama_url,model:raw.model,model_source:raw.model_source,roles,cloud:{enabled:$('#cloud-enabled').checked,base_url:raw.cloud_base_url,model:raw.cloud_model,api_key:raw.cloud_api_key},web:{enabled:$('#web-enabled').checked,search_provider:raw.web_provider,search_endpoint:raw.web_endpoint,search_api_key:raw.web_api_key,max_results:Number(raw.web_max_results||5),fetch_max_chars:6000}};await api('/api/settings',body);$('#settings-dialog').close();toast('设置已保存。');await refresh(true);await checkModels();}catch(error){toast(error.message);}});
+$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const raw=Object.fromEntries(new FormData(e.target));const roles={};document.querySelectorAll('#role-models .role-row').forEach(row=>{const source=row.querySelector('select').value;if(source)roles[row.dataset.role]={model_source:source,model:row.querySelector('input').value.trim()};});try{const body={ollama_url:raw.ollama_url,model:raw.model,model_source:raw.model_source,roles,cloud:{enabled:$('#cloud-enabled').checked,base_url:raw.cloud_base_url,model:raw.cloud_model,api_key:raw.cloud_api_key},web:{enabled:$('#web-enabled').checked,search_provider:raw.web_provider,search_endpoint:raw.web_endpoint,search_api_key:raw.web_api_key,max_results:Number(raw.web_max_results||5),fetch_max_chars:6000},limits:{max_tokens:Number(raw.limit_tokens||400000),max_seconds:Number(raw.limit_seconds||7200),max_steps:Number(raw.limit_steps||40)}};await api('/api/settings',body);$('#settings-dialog').close();toast('设置已保存。');await refresh(true);await checkModels();}catch(error){toast(error.message);}});
 $('#prepare-button').addEventListener('click',async()=>{try{await api('/api/prepare',{});toast('开始准备数据，所有文件写入当前项目的 data 目录。');await refresh(true);}catch(e){toast(e.message);}});
 $('#finalize-button').addEventListener('click',()=>$('#confirm-dialog').showModal());
 $('#confirm-finalize').addEventListener('click',async()=>{const button=$('#confirm-finalize');button.disabled=true;button.textContent='正在统一验收…';try{await api('/api/finalize',{});$('#confirm-dialog').close();toast('方案已冻结，最终测试结果已保存。');await refresh(true);await renderFinal();}catch(e){toast(e.message);}finally{button.disabled=false;button.textContent='确认冻结并验收';}});
@@ -430,7 +433,7 @@ $('#export-logs').addEventListener('click',()=>{
 goto(location.hash.slice(1)||'workspace');
 refresh(true).then(checkModels);
 setInterval(()=>refresh(),2200);
-setInterval(renderBudget,1000);
+setInterval(()=>renderBudget(),1000);
 
 /* Sidebar: collapsible, remembered locally; on small screens it closes after
    navigation so the page is immediately visible. */
@@ -447,3 +450,79 @@ applySidebar(sidebarCollapsed);
 $('#sidebar-toggle')?.addEventListener('click',()=>setSidebar(!sidebarCollapsed));
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!sidebarCollapsed&&window.matchMedia('(max-width:700px)').matches)setSidebar(true);});
 $$('.nav-item').forEach(el=>el.addEventListener('click',()=>{if(window.matchMedia('(max-width:700px)').matches&&!sidebarCollapsed)setSidebar(true);}));
+
+/* Sidebar research archive: one entry per session, like a conversation list. */
+function sidebarSessionDate(value){
+  const date=new Date(value), now=new Date(), yesterday=new Date(now);
+  yesterday.setDate(now.getDate()-1);
+  if(Number.isNaN(date.getTime()))return {group:'更早',label:'',full:''};
+  const today=date.toDateString()===now.toDateString();
+  return {group:today?'今天':date.toDateString()===yesterday.toDateString()?'昨天':'更早',
+    label:today?date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}):date.toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'}),
+    full:date.toLocaleString('zh-CN',{hour12:false})};
+}
+function renderSidebarSessions(){
+  const box=$('#sidebar-sessions');if(!box)return;
+  const runs=(state?.runs||[]).filter(r=>r.domain==='research'&&!r.archived);
+  const labels={queued:'等待中',running:'研究中',completed:'已完成',inconclusive:'证据不足',incomplete:'未完成',budget_stopped:'预算耗尽',cancelled:'已停止',interrupted:'已中断',failed:'执行失败'};
+  const count=$('#sidebar-session-count');if(count){count.textContent=runs.length;count.title=`${runs.length} 个未归档研究会话`;}
+  let group='';
+  const content=runs.length?runs.map(r=>{
+    const date=sidebarSessionDate(r.created_at),active=r.id===selectedId&&page==='session';
+    const title=String(r.question||r.task||'未命名研究').trim(),status=labels[r.status]||'状态未知';
+    const heading=group!==date.group?`<div class="session-group" role="presentation">${esc(date.group)}</div>`:'';group=date.group;
+    return `${heading}<div class="session-row${active?' active':''}" role="listitem"><button type="button" class="session-link${active?' active':''}" data-session="${esc(r.id)}" ${active?'aria-current="page"':''} title="${esc(title)}" aria-label="${esc(title)}，${esc(status)}"><span class="session-name">${esc(title)}</span><span class="session-meta"><span class="session-state"><span class="session-dot ${esc(r.status)}" aria-hidden="true"></span>${esc(status)}</span><time datetime="${esc(r.created_at||'')}" title="${esc(date.full)}">${esc(date.label)}</time></span></button><button type="button" class="session-archive" data-archive="${esc(r.id)}" title="归档会话" aria-label="归档：${esc(title)}">${icon('archive')}</button></div>`;
+  }).join(''):`<div class="session-empty"><span class="session-empty-icon">${icon('layers')}</span><strong>还没有研究记录</strong><span>从一个问题开始新的研究</span></div>`;
+  if(box.dataset.content===content)return;
+  const scroll=box.scrollTop,focused=document.activeElement;
+  const focusKey=box.contains(focused)?{session:focused.dataset.session,archive:focused.dataset.archive}:null;
+  box.innerHTML=content;box.dataset.content=content;box.scrollTop=scroll;
+  $$('[data-session]').forEach(el=>el.onclick=()=>selectRun(el.dataset.session));
+  $$('[data-archive]').forEach(button=>button.onclick=async event=>{
+    event.stopPropagation();
+    try{await api(`/api/runs/${button.dataset.archive}/archive`,{archived:true});toast('会话已归档，可在“归档”页恢复');await refresh(true);}
+    catch(error){toast(error.message);}
+  });
+  if(focusKey){const target=$$('[data-session], [data-archive]').find(el=>focusKey.session?el.dataset.session===focusKey.session:el.dataset.archive===focusKey.archive);target?.focus({preventScroll:true});}
+}
+renderSidebarSessions();
+const baseRefresh=refresh;
+refresh=async function(force=false){const result=await baseRefresh(force);renderSidebarSessions();return result;};
+$('#session-back')?.addEventListener('click',()=>goto('workspace'));
+
+statuses.inconclusive='证据不足';
+
+/* Archive page: open, restore or delete archived sessions. */
+function renderArchive(){
+  const box=$('#archive-list');
+  if(!box)return;
+  const runs=(state?.runs||[]).filter(r=>r.domain==='research'&&r.archived);
+  box.innerHTML=runs.length?runs.map(r=>`<article class="archive-card"><div class="archive-main"><span class="session-dot ${esc(r.status)}"></span><strong>${esc(r.task||'未命名研究')}</strong><small>${esc((r.archived_at||'').slice(0,16).replace('T',' '))} 归档 · ${esc(statuses[r.status]||r.status)}</small></div><div class="archive-actions"><button type="button" class="secondary-button" data-open="${esc(r.id)}">打开</button><button type="button" class="secondary-button" data-restore="${esc(r.id)}">恢复</button><button type="button" class="secondary-button danger" data-delete="${esc(r.id)}">删除</button></div></article>`).join(''):empty('没有归档会话','在会话页点“归档”后，这里会出现；删除会移到 runs/.trash。');
+  $$('[data-open]').forEach(el=>el.onclick=()=>selectRun(el.dataset.open));
+  $$('[data-restore]').forEach(el=>el.onclick=async()=>{try{await api(`/api/runs/${el.dataset.restore}/archive`,{archived:false});toast('会话已恢复');await refresh(true);}catch(error){toast(error.message);}});
+  $$('[data-delete]').forEach(el=>el.onclick=async()=>{
+    if(!window.confirm('删除后会话会移到 runs/.trash，不再出现在列表。确定删除？'))return;
+    try{await api(`/api/runs/${el.dataset.delete}/delete`,{});toast('已移入回收目录');await refresh(true);}catch(error){toast(error.message);}
+  });
+}
+const baseArchiveRefresh=refresh;
+refresh=async function(force=false){const result=await baseArchiveRefresh(force);if(page==='archive')renderArchive();renderSidebarSessions();return result;};
+const baseArchiveGoto=goto;
+goto=function(name){baseArchiveGoto(name);if(name==='archive')renderArchive();renderSidebarSessions();};
+$('#session-archive')?.addEventListener('click',async()=>{
+  if(!run){toast('先打开一个研究会话');return;}
+  try{await api(`/api/runs/${run.id}/archive`,{archived:true});toast('会话已归档');await refresh(true);goto('archive');}
+  catch(error){toast(error.message);}
+});
+
+/* Budget ceilings come from settings: keep the composer's input bounds in sync. */
+function applyBudgetLimits(){
+  const limits=(state&&state.settings&&state.settings.limits)||{};
+  const tokens=$('#research-tokens'),seconds=$('#research-seconds'),steps=$('#research-steps');
+  if(tokens){tokens.max=limits.max_tokens||400000;tokens.min=1000;}
+  if(seconds){seconds.max=limits.max_seconds||7200;seconds.min=10;}
+  if(steps){steps.max=limits.max_steps||40;steps.min=1;}
+}
+const baseLimitRefresh=refresh;
+refresh=async function(force=false){const result=await baseLimitRefresh(force);applyBudgetLimits();return result;};
+applyBudgetLimits();

@@ -21,7 +21,7 @@ from .engine import core as research_core
 from .engine import registry as research_registry
 from .engine import roles as research_roles
 from .engine.tools import TOOLS as RESEARCH_TOOLS
-from .storage import DATA, LOCK, ROOT, RUNS, get_memory, list_runs, masked_settings, memory_state, now, promote, read_json, rollback, run_path, settings, write_json
+from .storage import DATA, LOCK, ROOT, RUNS, archive_run, delete_run, get_memory, list_runs, masked_settings, memory_state, now, promote, read_json, rollback, run_path, settings, write_json
 from . import cloudllm
 from . import db
 from . import webaccess
@@ -32,7 +32,7 @@ WEB = ROOT / "web"
 
 
 def summary(run):
-    keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
+    keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "archived", "archived_at", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
     result = {k: run.get(k) for k in keys}
     result["domain"] = run.get("domain", "retrieval")
     if run.get("domain") == "research":
@@ -319,8 +319,22 @@ class Handler(BaseHTTPRequestHandler):
                              "search_api_key": web_key if web_enabled else "",
                              "max_results": max(1, min(int(web_given.get("max_results") or 5), 10)),
                              "fetch_max_chars": max(200, min(int(web_given.get("fetch_max_chars") or 6000), 20000))}
+                limits_given = body.get("limits") if isinstance(body.get("limits"), dict) else {}
+                current_limits = settings().get("limits") or {}
+                limits = {}
+                for key, floor, label in (("max_tokens", 1000, "token 上限"),
+                                          ("max_seconds", 10, "时间上限"),
+                                          ("max_steps", 1, "步骤上限")):
+                    raw = limits_given.get(key, current_limits.get(key))
+                    try:
+                        value_int = int(raw)
+                    except (TypeError, ValueError):
+                        raise ValueError(f"{label}必须是整数")
+                    if value_int < floor or value_int > 10_000_000:
+                        raise ValueError(f"{label}必须在 {floor}–10000000 之间")
+                    limits[key] = value_int
                 value = {"ollama_url": url, "model": model, "model_source": source, "cloud": value_cloud,
-                         "roles": cleaned_roles, "web": web_value}
+                         "roles": cleaned_roles, "web": web_value, "limits": limits}
                 write_json(ROOT / "config.json", value)
                 return self.send(200, masked_settings())
             if path == "/api/brief":
@@ -389,6 +403,49 @@ class Handler(BaseHTTPRequestHandler):
                         threading.Thread(target=work, daemon=True).start()
                     return self.send(202, summary(run))
                 return self.send(202, summary(SERVICE.start(body)))
+            if path.startswith("/api/runs/") and path.endswith("/continue"):
+                run_id = path.split("/")[3]
+                if SERVICE.active or (RESEARCH_ENGINE and RESEARCH_ENGINE.run["status"] in ("running", "queued")):
+                    raise ValueError("已有任务正在运行")
+                existing = read_json(run_path(run_id))
+                if existing.get("domain") != "research":
+                    raise ValueError("只有研究会话可以继续追问")
+                if existing.get("status") in ("running", "queued"):
+                    raise ValueError("该会话仍在运行")
+                engine = research_core.resume(existing, RUNS / run_id, body.get("question"),
+                                              token_limit=body.get("token_limit"),
+                                              seconds_limit=body.get("seconds_limit"),
+                                              max_steps=body.get("max_steps"))
+                RESEARCH_ENGINE = engine
+                SERVICE.active = run_id
+                def continue_work():
+                    try:
+                        engine.execute()
+                    finally:
+                        with LOCK:
+                            if SERVICE.active == run_id:
+                                SERVICE.active = None
+                threading.Thread(target=continue_work, daemon=True).start()
+                return self.send(202, summary(engine.run))
+            if path.startswith("/api/runs/") and path.endswith("/archive"):
+                run_id = path.split("/")[3]
+                if SERVICE.active == run_id or (RESEARCH_ENGINE and RESEARCH_ENGINE.run["id"] == run_id
+                                                 and RESEARCH_ENGINE.run["status"] in ("running", "queued")):
+                    raise ValueError("运行中不能归档")
+                archived = bool(body.get("archived", True))
+                run = archive_run(run_id, archived)
+                activity.record("archive", "会话已归档" if archived else "会话已恢复",
+                                source="api", actor="user", run_id=run_id, status="completed",
+                                data={"archived": archived})
+                return self.send(200, summary(run))
+            if path.startswith("/api/runs/") and path.endswith("/delete"):
+                run_id = path.split("/")[3]
+                if SERVICE.active == run_id:
+                    raise ValueError("运行中不能删除")
+                result = delete_run(run_id)
+                activity.record("archive", "会话已移入回收目录", source="api", actor="user",
+                                run_id=run_id, status="completed", data=result)
+                return self.send(200, result)
             if path.startswith("/api/runs/") and path.endswith("/cancel"):
                 if RESEARCH_ENGINE and RESEARCH_ENGINE.run["id"] == path.split("/")[3] and SERVICE.active == RESEARCH_ENGINE.run["id"]:
                     RESEARCH_ENGINE.cancelled.set()
