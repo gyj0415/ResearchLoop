@@ -7,8 +7,13 @@ def profile(engine, tier):
         return None
     if tier not in ('light','strong'):
         raise ValueError('模型档位只能是 auto、light 或 strong')
-    conf = ((engine.run.get('routing') or {}).get('profiles') or {}).get(tier) or {}
+    policy = engine.run.get('routing') or {}
+    conf = (policy.get('profiles') or {}).get(tier) or {}
     if not conf.get('model'):
+        # 「按调用选择模型」关闭时，工作流仍可能写下 light/strong。
+        # 未配置的档位沿用当前模型，而不是让这一步失败。
+        if not policy.get('enabled'):
+            return None
         raise ValueError(f'设置中尚未配置 {tier} 模型，请配置后再编排该档位')
     if conf.get('model_source') == 'cloud' and not storage.settings()['cloud'].get('enabled'):
         raise ValueError('该档位使用云端模型，但云端未启用')
