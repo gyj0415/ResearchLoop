@@ -1,0 +1,50 @@
+# Python environments and generated caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Dependencies, local checks and operating-system files
+node_modules/
+/.cache/
+/.qa/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+*.tmp
+
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+/config.json
+
+# Runtime data, model weights and experiment artifacts
+/data/
+/runs/
+/memory/
+/deliverables/
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.zip
+*.tar.gz
+
+# Local decisions, references and update logs are intentionally not published
+/docs/
