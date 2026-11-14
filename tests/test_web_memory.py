@@ -1,4 +1,6 @@
 """Web safety, fact memory, tool registry and workflow validation contracts."""
+import email.message
+import io
 import json
 import tempfile
 import unittest
@@ -20,6 +22,66 @@ class WebSafetyTests(unittest.TestCase):
     def test_public_urls_are_allowed(self):
         for url in ("https://example.com/page", "http://example.com"):
             self.assertEqual(webaccess.validate_outbound(url).hostname, "example.com")
+
+    @staticmethod
+    def answers(*addresses):
+        return [(None, None, None, "", (address, 443)) for address in addresses]
+
+    def test_non_ascii_url_is_percent_encoded(self):
+        with patch("researchloop.webaccess.socket.getaddrinfo", return_value=self.answers("104.21.41.121")):
+            self.assertEqual(webaccess.validate_outbound("https://zh.moegirl.org.cn/奶龙").geturl(),
+                             "https://zh.moegirl.org.cn/%E5%A5%B6%E9%BE%99")
+            self.assertEqual(webaccess.validate_outbound("https://zh.moegirl.org.cn/%E5%A5%B6%E9%BE%99?q=奶龙#x").geturl(),
+                             "https://zh.moegirl.org.cn/%E5%A5%B6%E9%BE%99?q=%E5%A5%B6%E9%BE%99")
+            self.assertEqual(webaccess.validate_outbound("https://例子.测试/a").hostname, "xn--fsqu00a.xn--0zwm56d")
+
+    def test_fetch_sends_an_ascii_request_line_for_chinese_paths(self):
+        sent = []
+
+        class Response(io.BytesIO):
+            headers = email.message.Message()
+            headers["Content-Type"] = "text/plain; charset=utf-8"
+
+            def geturl(self):
+                return sent[0]
+
+        class Opener:
+            def open(self, request, timeout=None):
+                sent.append(request.full_url)
+                request.full_url.encode("ascii")
+                return Response("奶龙".encode("utf-8"))
+
+        with patch("researchloop.webaccess.socket.getaddrinfo", return_value=self.answers("104.21.41.121")), \
+                patch("researchloop.webaccess.urllib.request.build_opener", return_value=Opener()):
+            page = webaccess.fetch("https://zh.moegirl.org.cn/奶龙")
+        self.assertEqual(sent, ["https://zh.moegirl.org.cn/%E5%A5%B6%E9%BE%99"])
+        self.assertIn("奶龙", page["content"])
+
+    def test_proxied_request_ignores_poisoned_special_answers_but_not_local_networks(self):
+        proxy = {"https": "http://127.0.0.1:7899", "http": "http://127.0.0.1:7899"}
+        with patch("researchloop.webaccess.urllib.request.getproxies", return_value=proxy), \
+                patch("researchloop.webaccess.urllib.request.proxy_bypass", return_value=False):
+            with patch("researchloop.webaccess.socket.getaddrinfo", return_value=self.answers("2001::1", "31.13.106.4")):
+                self.assertEqual(webaccess.validate_outbound("https://zh.wikipedia.org/wiki/x").hostname, "zh.wikipedia.org")
+            with patch("researchloop.webaccess.socket.getaddrinfo", return_value=self.answers("198.18.0.7")):
+                webaccess.validate_outbound("https://zh.wikipedia.org/wiki/x")
+            with patch("researchloop.webaccess.socket.getaddrinfo", side_effect=OSError("no answer")):
+                webaccess.validate_outbound("https://zh.wikipedia.org/wiki/x")
+            for local in ("127.0.0.1", "10.0.0.5", "192.168.1.2", "172.16.0.1", "169.254.169.254",
+                          "fe80::1", "fd00::1", "::1", "::ffff:10.0.0.5", "100.64.0.1"):
+                with patch("researchloop.webaccess.socket.getaddrinfo", return_value=self.answers(local)):
+                    with self.assertRaises(ValueError, msg=local):
+                        webaccess.validate_outbound("https://intranet.example/x")
+            for url in ("http://127.0.0.1/x", "http://10.1.2.3/x", "http://localhost/x"):
+                with self.assertRaises(ValueError, msg=url):
+                    webaccess.validate_outbound(url)
+
+    def test_direct_request_still_rejects_special_answers(self):
+        with patch("researchloop.webaccess.urllib.request.getproxies", return_value={}), \
+                patch("researchloop.webaccess.socket.getaddrinfo", return_value=self.answers("2001::1", "31.13.106.4")):
+            with self.assertRaises(ValueError) as raised:
+                webaccess.validate_outbound("https://zh.wikipedia.org/wiki/x")
+        self.assertIn("DNS", str(raised.exception))
 
     def test_redirect_to_local_target_is_rejected_before_following(self):
         import urllib.request

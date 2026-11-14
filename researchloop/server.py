@@ -87,6 +87,13 @@ class Handler(BaseHTTPRequestHandler):
         if not super().parse_request():
             return False
         if not local_host(self.headers.get("Host")):
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if 0 < length <= 80000:
+                    self.rfile.read(length)  # Draining lets Windows deliver the 403 instead of resetting.
+            except (ValueError, OSError):
+                pass
+            self.close_connection = True
             self.send(403, {"error": "Only localhost requests are allowed"})
             return False
         return True

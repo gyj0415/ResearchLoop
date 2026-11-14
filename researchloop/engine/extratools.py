@@ -45,6 +45,7 @@ def web_fetch(engine, args):
     if not config.get("enabled"):
         raise ValueError("联网工具未启用：请先在设置中启用并配置搜索服务")
     url = str(args.get("url") or "")
+    url = webaccess.normalise_url(url) if url else url
     existing = next((source for source in engine.run["sources"]
                      if source.get("url") == url and source.get("content")), None)
     if existing and existing.get("truncated") is False:

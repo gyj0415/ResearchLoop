@@ -24,23 +24,56 @@ TEXT_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/j
               "application/xml", "application/rss+xml", "application/atom+xml")
 
 
+LOCAL_NETWORKS = [ipaddress.ip_network(value) for value in (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+    "192.168.0.0/16", "224.0.0.0/4", "255.255.255.255/32",
+    "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8")]
+
+
 def _reject(ip, label):
     if (ip.is_loopback or ip.is_private or ip.is_unspecified or ip.is_link_local
             or ip.is_multicast or ip.is_reserved):
         raise ValueError(f"不允许访问{label}地址：{ip}")
 
 
+def _local_network(ip):
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    return any(ip in network for network in LOCAL_NETWORKS if network.version == ip.version)
+
+
+def normalise_url(raw):
+    """Percent-encode non-ASCII paths and queries and IDNA-encode the host; existing escapes are kept."""
+    parts = urllib.parse.urlsplit(str(raw or "").strip())
+    host = parts.hostname or ""
+    try:
+        ascii_host = host.encode("idna").decode("ascii") if host and not host.isascii() else host
+    except UnicodeError as error:
+        raise ValueError(f"主机名无法编码：{host}") from error
+    if ":" in ascii_host:
+        ascii_host = f"[{ascii_host}]"
+    netloc = ascii_host + (f":{parts.port}" if parts.port else "")
+    path = urllib.parse.quote(parts.path, safe="/%:@!$&'()*+,;=-._~")
+    query = urllib.parse.quote(parts.query, safe="=&%/:?@!$'()*+,;-._~")
+    return urllib.parse.urlunsplit((parts.scheme.lower(), netloc, path, query, ""))
+
+
+def _proxied(parsed):
+    proxy = urllib.request.getproxies().get(parsed.scheme)
+    return bool(proxy) and not urllib.request.proxy_bypass(parsed.hostname)
+
+
 def validate_outbound(raw, allowed_hosts=()):
-    parsed = urllib.parse.urlparse(str(raw or "").strip())
-    if parsed.scheme not in ("http", "https"):
+    original = urllib.parse.urlparse(str(raw or "").strip())
+    if original.scheme not in ("http", "https"):
         raise ValueError("仅允许 http/https URL")
-    host = parsed.hostname
-    if not host:
+    if not original.hostname:
         raise ValueError("URL 缺少主机名")
+    if original.port not in (None, 80, 443):
+        raise ValueError("只允许标准端口 80/443")
+    parsed = urllib.parse.urlparse(normalise_url(raw))
+    host = parsed.hostname
     if host.lower().rstrip(".") == "localhost":
         raise ValueError("不允许访问 localhost")
-    if parsed.port not in (None, 80, 443):
-        raise ValueError("只允许标准端口 80/443")
     if any(host.lower() == str(item).lower() for item in allowed_hosts):
         return parsed
     try:
@@ -49,11 +82,22 @@ def validate_outbound(raw, allowed_hosts=()):
     except ValueError as error:
         if "不允许访问" in str(error):
             raise
-    addresses = socket.getaddrinfo(host, None)
-    if not addresses:
+    proxied = _proxied(parsed)
+    try:
+        addresses = socket.getaddrinfo(host, None)
+    except OSError:
+        if proxied:
+            return parsed  # The proxy resolves the name; local DNS failure says nothing about the target.
+        raise
+    if not addresses and not proxied:
         raise ValueError("无法解析主机")
     for info in addresses:
-        _reject(ipaddress.ip_address(info[4][0]), "私有或本地")
+        ip = ipaddress.ip_address(info[4][0])
+        if _local_network(ip):
+            raise ValueError(f"不允许访问私有或本地地址：{ip}")
+        if not proxied and not ip.is_global:
+            raise ValueError(f"本机 DNS 为 {host} 返回了特殊用途地址 {ip}，可能是 DNS 污染；"
+                             "直连时拒绝访问，经系统代理访问时由代理解析")
     return parsed
 
 
