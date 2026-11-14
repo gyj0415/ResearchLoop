@@ -40,10 +40,20 @@ class Budget:
     def elapsed(self):
         return time.monotonic() - self.started
 
+    @property
+    def token_cap(self):
+        return self.token_limit  # None means unlimited
+
+    def token_room(self, amount):
+        return self.token_limit is None or self.used + amount <= self.token_limit
+
+    def seconds_left(self):
+        return None if self.seconds_limit is None else max(0.0, self.seconds_limit - self.elapsed)
+
     def reserve(self, amount):
-        if self.used + amount > self.token_limit:
+        if not self.token_room(amount):
             raise BudgetError("剩余 token 不足以保守预留下一次调用")
-        if self.elapsed >= self.seconds_limit - 2:
+        if self.seconds_limit is not None and self.elapsed >= self.seconds_limit - 2:
             raise BudgetError("研究时间预算已耗尽")
 
     def record(self, item):

@@ -14,14 +14,14 @@ import urllib.request
 from pathlib import Path
 
 TOOLS = [
-    {"name": "plan", "description": "判断现有数据和工具能否回答问题，说明研究方法和缺失条件；不能执行时明确停止。", "arguments": {"feasible": True, "method": "研究设计", "limitations": "局限", "literature_query": "需要的文献关键词，可空"}},
+    {"name": "plan", "description": "判断当前证据是否足以推进，说明方法、缺失条件与下一步取证方向；feasible=false 表示需要继续取证，不是终止。", "arguments": {"feasible": True, "method": "研究设计", "limitations": "局限", "literature_query": "需要的文献关键词，可空"}},
     {"name": "inspect", "description": "查看可用材料、CSV列/样例和本地实验环境；无材料时可设计可复现数值模拟。", "arguments": {}},
     {"name": "literature", "description": "从Crossref检索真实论文元数据。仅有标题不能证明论文结论；摘要可能缺失。", "arguments": {"query": "英文或中文关键词"}},
     {"name": "read", "description": "读取上传的文本/CSV材料，记录证据来源。", "arguments": {"asset_id": "a1"}},
     {"name": "hypothesis", "description": "实验前注册可证伪假设、机制、控制条件及指标判据。", "arguments": {"statement": "假设", "prediction": "预测", "controls": "控制/比较方法", "metric": "实验输出指标名", "relation": "gt/ge/lt/le", "threshold": 0.0}},
     {"name": "experiment", "description": "为已注册假设运行自主编写的受约束Python。提供np,rng,load_csv(id),load_text(id),emit_result。不得读取任意路径或联网。先实际计算metrics，再emit_result({'metrics':metrics})。", "arguments": {"hypothesis_id": "h1", "code": "实验Python代码"}},
     {"name": "verify", "description": "冻结实验代码，用未向模型暴露的新随机种子重跑，固定代码按已注册判据验证。", "arguments": {"experiment_id": "x1"}},
-    {"name": "reflect", "description": "根据真实探索与复核结果，决定修正假设继续研究，或结束并报告负/正结果。", "arguments": {"next_action": "revise/finish", "reason": "基于证据的判断"}},
+    {"name": "reflect", "description": "仅在有已复核实验时使用：决定修正假设继续研究，或结束并报告负/正结果。", "arguments": {"next_action": "revise/finish", "reason": "基于证据的判断"}},
     {"name": "finish", "description": "以真实证据引用结束研究；没有经过独立重跑的实验只能给出未完成报告。", "arguments": {"conclusion": "结论及局限", "citations": ["h1", "x1", "p1"], "lesson": "有条件的研究方法经验"}},
 ]
 

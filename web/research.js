@@ -90,7 +90,12 @@ async function startGeneralResearch(){
     const assets=[];for(const file of pendingFiles)assets.push(await assetPayload(file));
     const pick=$('#research-model').value;
     const isCloud=pick.startsWith('cloud:');
-    const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,roles:state.settings?.roles||{},token_limit:Number($('#research-tokens').value),seconds_limit:Number($('#research-seconds').value),max_steps:Number($('#research-steps').value)});
+    const budgetOn=$('#budget-enabled').checked;
+    const tokensK=Number($('#research-tokens-k').value||0);
+    const secondsRaw=$('#research-seconds').value.trim();
+    const stepsRaw=$('#research-steps').value.trim();
+    if(budgetOn&&(!tokensK||tokensK<=0))throw new Error('启用预算时请填写 token 预算（k）');
+    const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,roles:state.settings?.roles||{},budget_enabled:budgetOn,token_limit:budgetOn?Math.round(tokensK*1000):null,seconds_limit:budgetOn&&secondsRaw?Number(secondsRaw):null,max_steps:budgetOn&&stepsRaw?Number(stepsRaw):null});
     pendingFiles=[];renderAssetChips();
     await selectRun(created.id);toast('研究已启动；材料已随本次运行保存。');
   }catch(error){toast(error.message);}finally{button.disabled=!!state?.active_run;}
@@ -128,7 +133,7 @@ $('#random-topic').addEventListener('click',()=>{const input=$('#brief-input');i
 
 /* --- workflow orchestration, decision chain and session metrics --- */
 statuses.done='阶段完成';
-const ROLE_LABELS={planner:'规划',experimenter:'实验',verifier:'复核',reporter:'报告'};
+const ROLE_LABELS={planner:'规划',analyst:'分析',generalist:'通用',experimenter:'实验',verifier:'复核',reporter:'报告'};
 function roleLabel(role){return ROLE_LABELS[role]||role||'—';}
 let sessionTab='overview', sessionViewId='', chainView={runId:'',turn:'all',status:'all',query:''};
 const TOOL_LABELS={get_memory_context:'读取研究经验',inspect:'检查材料',design_workflow:'设计研究流程',plan:'制定研究方案',literature:'检索文献',platform_search:'检索平台',web_search:'搜索网页',web_fetch:'读取网页',extract_document:'提取文档',read:'读取材料',hypothesis:'注册假设',experiment:'运行实验',verify:'复核实验',reflect:'评估结果',finish:'形成结论',invalid:'决策失败',remember_fact:'保存事实',recall_facts:'查找事实'};
@@ -162,7 +167,7 @@ function renderWorkflow(run){
   panel.classList.remove('hidden');
   const stages=run.workflow?.stages||[],turn=run.turns?.at(-1)?.id,agents=(run.agents||[]).filter(a=>!a.turn||!turn||a.turn===turn),calls=(run.calls||[]).filter(c=>!c.turn||!turn||c.turn===turn);
   const byAgent={};calls.forEach(c=>{if(c.agent)byAgent[c.agent]=(byAgent[c.agent]||0)+1;});
-  panel.innerHTML=`<div class="panel-header"><h2>本轮研究流程</h2><span class="workflow-source">${esc(run.workflow?.source==='agent_tool'?'Agent 设计':run.workflow?.source==='model'?'模型规划':run.workflow?.source==='model_retry'?'模型重试':'默认规划')} · ${stages.length} 阶段</span></div>${run.workflow?.reason?`<p class="workflow-reason">${esc(run.workflow.reason)}</p>`:''}<div class="workflow-stages">${stages.map((s,i)=>{const a=agents.filter(x=>x.id==='g'+(i+1)).at(-1)||{};return `<article class="workflow-stage${a.status==='running'?' active':''}"><div class="workflow-stage-heading"><span class="workflow-index">${String(i+1).padStart(2,'0')}</span><h3>${esc(roleLabel(s.role))}</h3><span class="workflow-stage-status">${esc(statuses[a.status]||'未开始')}</span></div><p>${esc(s.goal)}</p>${s.why?`<details class="stage-why"><summary>设计依据</summary><p>${esc(s.why)}</p></details>`:''}<small>${esc(a.model||'尚未调用模型')} · ${byAgent[a.id]||0} 次调用</small></article>`;}).join('')}</div>`;
+  panel.innerHTML=`<div class="panel-header"><h2>本轮研究流程</h2><span class="workflow-source">${esc(run.workflow?.source==='agent_tool'?'Agent 设计':run.workflow?.source==='model'?'模型规划':run.workflow?.source==='model_retry'?'模型重试':'默认规划')} · ${stages.length} 阶段</span></div>${run.workflow?.reason?`<p class="workflow-reason">${esc(run.workflow.reason)}</p>`:''}<div class="workflow-stages">${stages.map((s,i)=>{const a=agents.filter(x=>x.id==='g'+(i+1)).at(-1)||{};return `<article class="workflow-stage${a.status==='running'?' active':''}"><div class="workflow-stage-heading"><span class="workflow-index">${String(i+1).padStart(2,'0')}</span><h3>${esc(s.label||roleLabel(s.role))}</h3><span class="workflow-stage-status">${esc(statuses[a.status]||'未开始')}</span></div><p>${esc(s.goal)}</p>${s.why?`<details class="stage-why"><summary>设计依据</summary><p>${esc(s.why)}</p></details>`:''}<small>${esc(a.model||'尚未调用模型')} · ${byAgent[a.id]||0} 次调用</small></article>`;}).join('')}</div>`;
 }
 function invocationRecords(value){
   if(value.trace?.length)return value.trace;
@@ -214,10 +219,10 @@ function renderBudgetResearch(){
   const speed=wall?out/wall:0;
   const set=(id,value)=>{const el=document.getElementById(id);if(el&&el.textContent!==value)el.textContent=value;};
   const bar=(id,percent)=>{const el=document.getElementById(id);if(!el)return;const width=Math.min(100,Math.max(0,percent))+'%';if(el.style.width!==width)el.style.width=width;};
-  set('budget-token-text',`${number(b.total_tokens)} / ${number(b.token_limit)}`);
-  bar('budget-token-bar',b.total_tokens/b.token_limit*100);
-  set('budget-time-text',`${time(Math.max(b.elapsed_seconds||0,wall))} / ${time(b.seconds_limit)}`);
-  bar('budget-time-bar',(b.elapsed_seconds||0)/b.seconds_limit*100);
+  set('budget-token-text',`${number(b.total_tokens)} / ${b.token_limit===null||b.token_limit===undefined?'不限':number(b.token_limit)}`);
+  bar('budget-token-bar',b.token_limit?b.total_tokens/b.token_limit*100:0);
+  set('budget-time-text',`${time(Math.max(b.elapsed_seconds||0,wall))} / ${b.seconds_limit===null||b.seconds_limit===undefined?'不限':time(b.seconds_limit)}`);
+  bar('budget-time-bar',b.seconds_limit?(b.elapsed_seconds||0)/b.seconds_limit*100:0);
   set('budget-calls',`${b.model_calls||0} 次`);
   set('budget-speed',`${speed.toFixed(1)} tok/s`);
   set('budget-cached',`${number(cached)} token`);

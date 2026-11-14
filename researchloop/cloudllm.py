@@ -71,7 +71,8 @@ class Cloud:
         try:
             request = urllib.request.Request(self.base_url + "/chat/completions",
                                              data=json.dumps(body).encode(), headers=headers(self.api_key))
-            timeout = max(1, min(180, self.budget.seconds_limit - self.budget.elapsed))
+            left = self.budget.seconds_left()
+            timeout = 180 if left is None else max(1, min(180, left))
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 result = json.load(response)
             usage = result.get("usage") or {}
@@ -97,6 +98,6 @@ class Cloud:
             self.budget.record(item)
             if self.on_call:
                 self.on_call(item)
-        if self.budget.used > self.budget.token_limit:
+        if self.budget.token_limit is not None and self.budget.used > self.budget.token_limit:
             raise BudgetError("模型实际 usage 超过预留上界，停止后续调用")
         return parsed, item

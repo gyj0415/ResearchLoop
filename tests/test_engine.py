@@ -193,15 +193,23 @@ class ResearchEngineTests(unittest.TestCase):
         self.assertEqual(result["status"], "inconclusive")
         self.assertTrue(engine.run["report"].get("evidence_gaps"))
 
-    def test_budget_ceilings_are_configurable(self):
+    def test_budget_limits_are_optional_and_not_capped(self):
         engine = core.create({"question": "研究样本量对估计误差的影响", "token_limit": 300000,
                               "seconds_limit": 3600, "max_steps": 30})
         self.assertEqual(engine.run["token_limit"], 300000)
-        base = storage.settings()
-        stricter = {**base, "limits": {"max_tokens": 200000, "max_seconds": 3600, "max_steps": 20}}
-        with patch("researchloop.storage.settings", return_value=stricter):
-            with self.assertRaises(ValueError):
-                core.create({"question": "研究样本量对估计误差的影响", "token_limit": 300000})
+        self.assertEqual(engine.run["budget_enabled"], True)
+        partial = core.create({"question": "研究样本量对估计误差的影响", "token_limit": 9000,
+                               "seconds_limit": None, "max_steps": None})
+        self.assertEqual(partial.run["token_limit"], 9000)
+        self.assertIsNone(partial.run["seconds_limit"])
+        self.assertIsNone(partial.run["max_steps"])
+        unlimited = core.create({"question": "研究样本量对估计误差的影响", "budget_enabled": False})
+        self.assertFalse(unlimited.run["budget_enabled"])
+        self.assertIsNone(unlimited.run["token_limit"])
+        self.assertIsNone(unlimited.run["seconds_limit"])
+        self.assertIsNone(unlimited.run["max_steps"])
+        with self.assertRaises(ValueError):
+            core.create({"question": "研究样本量对估计误差的影响", "token_limit": -5})
 
     def test_finish_is_hidden_until_a_plan_exists_once_evidence_collected(self):
         engine = self.engine()
@@ -256,3 +264,113 @@ class ResearchEngineTests(unittest.TestCase):
         item = engine.apply("hypothesis", {"statement": "s", "prediction": "p", "controls": "c",
                                            "metric": "delta_accuracy", "relation": "gt", "threshold": 1.0})
         self.assertEqual(item["metric"], "delta_accuracy")
+
+    def test_infeasible_plan_keeps_collecting_evidence_before_finishing(self):
+        engine = self.engine()
+        engine.apply("plan", {"feasible": False, "method": "先取证再评估", "limitations": "缺少平台数据",
+                              "literature_query": "", "research_kind": "qualitative"})
+        self.assertNotIn(engine.run["status"], ("inconclusive", "completed", "incomplete"))
+        self.assertTrue(engine.run["gap_fill"]["required"])
+        self.assertNotIn("finish", engine.available_tools())
+        with self.assertRaises(ValueError):
+            engine.apply("finish", {"conclusion": "证据不足，无法回答。", "citations": [], "lesson": ""})
+        engine.note_evidence_attempt("web_search", {"query": "奶龙"}, "completed")
+        engine.note_evidence_attempt("web_search", {"query": "奶龙"}, "completed")  # duplicate marker
+        self.assertEqual(engine.run["gap_fill"]["attempts"], 1)
+        engine.note_evidence_attempt("platform_search", {"platform": "bilibili", "query": "奶龙"}, "completed")
+        engine.note_evidence_attempt("literature", {"query": "Nailong"}, "completed")
+        self.assertFalse(engine.run["gap_fill"]["required"])
+        self.assertIn("finish", engine.available_tools())
+        result = engine.apply("finish", {"conclusion": "已尝试多种来源仍缺少可引用证据，报告未完成。",
+                                         "citations": [], "lesson": ""})
+        self.assertEqual(result["status"], "inconclusive")
+
+    def test_search_tool_does_not_require_a_second_reason_in_args(self):
+        engine = self.engine()
+        base = storage.settings()
+        web = {**base["web"], "enabled": True, "search_provider": "searxng",
+               "search_endpoint": "https://search.example.com/search", "search_api_key": ""}
+        payload = {"message": {"content": json.dumps({"tool": "web_search", "reason": "查平台",
+                                                      "args": {"query": "奶龙"}})},
+                   "prompt_eval_count": 30, "eval_count": 20}
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}), \
+                patch("researchloop.engine.core.urllib.request.urlopen",
+                      side_effect=lambda *args, **kwargs: io.BytesIO(json.dumps(payload).encode())):
+            decision = engine.agent_step()
+        self.assertEqual(decision["tool"], "web_search")
+        self.assertEqual(decision["args"]["query"], "奶龙")
+
+    def test_missing_selection_reason_is_normalized(self):
+        engine = self.engine()
+        payload = {"message": {"content": json.dumps({"tool": "inspect", "args": {}})},
+                   "prompt_eval_count": 30, "eval_count": 20}
+        with patch("researchloop.engine.core.urllib.request.urlopen",
+                   return_value=io.BytesIO(json.dumps(payload).encode())):
+            decision = engine.agent_step()
+        self.assertEqual(decision["reason"], "模型未说明选择依据")
+
+    def test_wrap_up_finish_is_not_vetoed_by_role(self):
+        engine = self.engine()
+        engine.run["workflow_mode"] = "plan"
+        engine.run["active_agent"] = {"id": "g1", "role": "planner"}
+        engine.run["plan"] = {"feasible": True, "method": "m", "limitations": "",
+                              "literature_query": "", "research_kind": "literature"}
+        engine.run["sources"] = [{"id": "p1", "title": "x", "url": "https://example.com/a"}]
+        engine.run["steps"] = [{"id": "s1", "tool": "inspect", "status": "completed", "turn": "t1",
+                                "agent": "g1", "elapsed_seconds": 0}]
+        engine.budget.input_tokens = engine.run["token_limit"] - 500
+        self.assertEqual(engine.available_tools(), ["finish"])
+        self.assertIsNone(engine.allowed_tools())
+
+    def test_reflect_is_only_offered_after_a_verified_experiment(self):
+        engine = self.engine()
+        engine.run["plan"] = {"feasible": True, "method": "m", "limitations": "",
+                              "literature_query": "", "research_kind": "quantitative"}
+        engine.run["hypotheses"] = [{"id": "h1", "metric": "error", "relation": "lt", "threshold": 1.0}]
+        self.assertNotIn("reflect", engine.available_tools())
+        engine.run["experiments"] = [{"id": "x1", "hypothesis_id": "h1", "status": "completed",
+                                      "verification": {"result": {"metrics": {"error": 0.1}}, "check": {"passed": True}}}]
+        self.assertIn("reflect", engine.available_tools())
+
+    def test_reflect_without_verified_experiment_explains_what_to_do(self):
+        engine = self.engine()
+        engine.run["hypotheses"] = [{"id": "h1", "metric": "error", "relation": "lt", "threshold": 1.0}]
+        with self.assertRaises(ValueError) as caught:
+            engine.apply("reflect", {"next_action": "finish", "reason": "没有实验"})
+        message = str(caught.exception)
+        self.assertIn("没有已复核实验", message)
+        self.assertIn("finish", message)
+
+    def test_reflect_accepts_common_synonyms(self):
+        engine = self.engine()
+        engine.run["hypotheses"] = [{"id": "h1", "metric": "error", "relation": "lt", "threshold": 1.0}]
+        engine.run["experiments"] = [{"id": "x1", "hypothesis_id": "h1", "status": "completed",
+                                      "verification": {"result": {"metrics": {"error": 0.1}}, "check": {"passed": True}}}]
+        item = engine.apply("reflect", {"next_action": "done", "reason": "复核通过，收束"})
+        self.assertEqual(item["next_action"], "finish")
+        self.assertEqual(engine.run["reflections"][-1]["after_experiment"], "x1")
+
+    def test_gap_fill_keeps_evidence_tools_open_in_later_stages(self):
+        engine = self.engine()
+        engine.apply("plan", {"feasible": False, "method": "先取证", "limitations": "缺平台数据",
+                              "literature_query": "", "research_kind": "qualitative"})
+        engine.run["workflow_mode"] = "plan"
+        engine.run["active_agent"] = {"id": "g3", "role": "reporter"}
+        base = storage.settings()
+        web = {**base["web"], "enabled": True, "search_provider": "searxng",
+               "search_endpoint": "https://search.example.com/search", "search_api_key": ""}
+        with patch("researchloop.storage.settings", return_value={**base, "web": web}):
+            names = engine.available_tools()
+        self.assertNotIn("finish", names)
+        for tool in ("web_search", "platform_search", "literature"):
+            self.assertIn(tool, names)
+        allowed = engine.allowed_tools()
+        self.assertIn("web_search", allowed)
+
+    def test_custom_stage_tool_subset_limits_available_tools(self):
+        engine = self.engine()
+        engine.run["plan"] = {"feasible": True, "method": "m", "limitations": "",
+                              "literature_query": "", "research_kind": "literature"}
+        engine.run["active_agent"] = {"id": "g1", "role": "generalist", "tools": ["literature"]}
+        self.assertEqual(engine.available_tools(), ["literature"])
+        self.assertEqual(engine.allowed_tools(), {"literature"})

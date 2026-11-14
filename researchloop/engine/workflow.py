@@ -15,17 +15,21 @@ SCHEMA = {
     "properties": {
         "stages": {"type": "array", "items": {
             "type": "object",
-            "properties": {"role": {"type": "string", "enum": list(roles.ROLES)},
+            "properties": {"role": {"type": "string",
+                                       "description": "已知角色名（planner/analyst/generalist/experimenter/verifier/reporter），或自定义阶段名"},
                            "goal": {"type": "string"},
                            "why": {"type": "string"},
-                           "max_steps": {"type": "integer"}},
+                           "max_steps": {"type": "integer"},
+                           "tools": {"type": "array", "items": {"type": "string"},
+                                     "description": "可选：只允许该阶段使用的工具子集"}},
             "required": ["role", "goal", "why"]}},
         "reason": {"type": "string"},
     },
     "required": ["stages"],
 }
 
-MAX_STAGES = 6
+MAX_STAGES = 8
+MAX_STAGE_STEPS = 12
 ROLE_ALIASES = {"规划": "planner", "计划": "planner", "实验": "experimenter", "复核": "verifier",
                 "验证": "verifier", "报告": "reporter", "撰写": "reporter",
                 "planner": "planner", "experimenter": "experimenter", "verifier": "verifier", "reporter": "reporter"}
@@ -51,15 +55,37 @@ def validate(stages):
     for index, stage in enumerate(stages):
         if not isinstance(stage, dict):
             raise ValueError(f"第{index + 1}阶段必须是对象（role/goal/max_steps），收到 {type(stage).__name__}")
-        role = ROLE_ALIASES.get(str(stage.get("role", "")).strip(), "")
-        goal = str(stage.get("goal", "")).strip()
+        raw_role = str(stage.get("role", "")).strip()
+        if not raw_role or len(raw_role) > 40:
+            raise ValueError(f"第{index + 1}阶段缺少角色或阶段名")
+        role = ROLE_ALIASES.get(raw_role.lower(), raw_role.lower())
+        label = ""
         if role not in roles.ROLES:
-            raise ValueError(f"第{index + 1}阶段角色无效：{stage.get('role')}")
+            # Unknown names become a custom stage with the generalist profile,
+            # keeping the author's name for display.
+            label = raw_role[:40]
+            role = "generalist"
+        goal = str(stage.get("goal", "")).strip()
         if not goal or len(goal) > 400:
             raise ValueError(f"第{index + 1}阶段缺少目标描述")
         steps = stage.get("max_steps")
         steps = int(steps) if isinstance(steps, int) else 3
-        cleaned.append({"role": role, "goal": goal, "max_steps": max(1, min(6, steps)),
+        tools = stage.get("tools")
+        selected = None
+        if tools is not None:
+            if not isinstance(tools, list) or any(not isinstance(item, str) for item in tools):
+                raise ValueError(f"第{index + 1}阶段 tools 必须是工具名数组")
+            ceiling = set(roles.tools_for(role))
+            chosen = [item for item in tools if item in ceiling]
+            unknown = [item for item in tools if item not in ceiling]
+            if unknown:
+                raise ValueError(f"第{index + 1}阶段工具不在该角色范围内：{unknown}")
+            if not chosen:
+                raise ValueError(f"第{index + 1}阶段 tools 不能为空")
+            selected = chosen
+        cleaned.append({"role": role, "label": label or roles.ROLES[role]["label"],
+                        "goal": goal, "max_steps": max(1, min(MAX_STAGE_STEPS, steps)),
+                        "tools": selected,
                         "why": str(stage.get("why") or "").strip()[:400]})
     return cleaned
 
@@ -88,9 +114,10 @@ def plan(engine):
     run = engine.run
     prompt = {"question": engine.question_text(), "assets": run["assets"], "budget": engine.budget.snapshot(),
               "roles": roles.describe(),
-              "instruction": "只输出stages数组：为完成这个研究问题选择1–6个阶段，每个阶段给出role、goal、max_steps。"
-                             "定性或文献问题可以没有实验阶段；需要数值实验时必须有experimenter，复核与报告应在实验之后。"
-                             "每个阶段必须写 why：为什么需要这个阶段、它解决什么问题。阶段目标不能预设尚未核实的结论；先验证问题前提或出处。不要编造材料中没有的数据。"}
+              "instruction": "只输出stages数组：阶段数量与划分由这个问题本身决定（1–8个），不要套用固定的四阶段模板。"
+                             "每个阶段给出role、goal、max_steps；可以为阶段取自定义名称（role填自定义名，会作为通用阶段执行），"
+                             "也可以用 tools 限定该阶段只使用哪些工具。定性/文献问题可以没有实验；需要数值实验时应有experimenter，复核与报告在实验之后。"
+                             "每个阶段必须写 why：为什么需要、解决什么、为什么这个顺序。阶段目标不能预设未核实的结论；不要编造材料中没有的数据。"}
     attempts = []
     stages = None
     source = "default"
@@ -132,8 +159,8 @@ def plan(engine):
 from . import registry
 
 registry.register_tool("design_workflow", design,
-                       description="设计研究的工作流：给出每个阶段角色、目标、步数上限与设计理由，供编排器执行。",
+                       description="设计研究的工作流：阶段数量与划分由问题决定（1–8），可自定义阶段名并用 tools 限定工具。",
                        arguments={"reason": "整体设计理由",
                                   "stages": [{"role": "planner", "goal": "阶段目标", "why": "为什么需要这个阶段",
-                                              "max_steps": 3}]},
+                                              "max_steps": 3, "tools": ["literature"]}]},
                        required=["reason", "stages"])

@@ -24,6 +24,21 @@ ROLES = {
         "tools": ["verify"],
         "system": "你是独立复核者。只对已完成实验执行复核；复核可能否定假设，这也是有效结果。不要修改阈值或代码。",
     },
+    "analyst": {
+        "label": "分析",
+        "goal": "围绕阶段目标检索、读取并比较真实来源，整理证据与缺口",
+        "tools": ["inspect", "literature", "platform_search", "read", "read_docx", "read_pptx", "read_pdf",
+                  "web_search", "web_fetch", "get_memory_context", "remember_fact"],
+        "system": "你是证据分析者。围绕阶段目标检索、读取并比较真实来源，记录证据缺口；不把摘要或元数据当作结论，不做未经复核的定量断言。",
+    },
+    "generalist": {
+        "label": "通用",
+        "goal": "按阶段目标自由组合取证、假设、实验、复核与整理",
+        "tools": ["design_workflow", "inspect", "literature", "platform_search", "read", "read_docx", "read_pptx",
+                  "read_pdf", "plan", "hypothesis", "experiment", "verify", "web_search", "web_fetch",
+                  "get_memory_context", "remember_fact", "finish"],
+        "system": "你是通用研究执行者。根据阶段目标自主选择工具：取证、注册假设、运行并复核实验或整理证据；不越过证据下结论，结束时说明缺口。",
+    },
     "reporter": {
         "label": "报告",
         "goal": "根据真实探索与复核结果形成结论、局限与方法经验",

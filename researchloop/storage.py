@@ -57,7 +57,7 @@ def source_hash():
 
 
 CLOUD_DEFAULTS = {"enabled": False, "base_url": "", "model": "", "api_key": ""}
-LIMIT_DEFAULTS = {"max_tokens": 400000, "max_seconds": 7200, "max_steps": 40}
+BUDGET_DEFAULTS = {"tokens_k": 60, "seconds": None, "steps": None}
 WEB_DEFAULTS = {"enabled": False, "search_provider": "searxng", "search_endpoint": "",
                 "search_api_key": "", "max_results": 5, "fetch_max_chars": 6000}
 
@@ -66,12 +66,13 @@ def settings():
     saved = dict(read_json(ROOT / "config.json", {}) or {})
     cloud = {**CLOUD_DEFAULTS, **(saved.pop("cloud", None) or {})}
     web = {**WEB_DEFAULTS, **(saved.pop("web", None) or {})}
-    limits = {**LIMIT_DEFAULTS, **(saved.pop("limits", None) or {})}
+    budgets = {**BUDGET_DEFAULTS, **(saved.pop("budgets", None) or {})}
+    saved.pop("limits", None)
     value = {"ollama_url": "http://127.0.0.1:11434", "model": "deepseek-r1:8b",
              "model_source": "local", **saved}
     value["cloud"] = cloud
     value["web"] = web
-    value["limits"] = limits
+    value["budgets"] = budgets
     return value
 
 

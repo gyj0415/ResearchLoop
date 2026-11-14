@@ -31,7 +31,7 @@ WEB = ROOT / "web"
 
 
 def summary(run):
-    keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "archived", "archived_at", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
+    keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "archived", "archived_at", "budget_enabled", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
     result = {k: run.get(k) for k in keys}
     result["domain"] = run.get("domain", "unknown")
     if run.get("domain") == "research":
@@ -200,7 +200,8 @@ class Handler(BaseHTTPRequestHandler):
                 source = str(body.get("model_source") or "local").strip().lower()
                 if source not in ("local", "cloud"):
                     raise ValueError("模型来源只能是 local 或 cloud")
-                role_models = body.get("roles") if isinstance(body.get("roles"), dict) else {}
+                role_models = (body.get("roles") if isinstance(body.get("roles"), dict)
+                               else (settings().get("roles") or {}))
                 cleaned_roles = {}
                 for role, conf in role_models.items():
                     if role not in research_roles.ROLES:
@@ -226,8 +227,12 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("启用云端模型需要 8–400 字符的 API Key")
                     value_cloud = {"enabled": True, "base_url": base_url, "model": cloud_model, "api_key": api_key}
                 else:
-                    value_cloud = {"enabled": False, "base_url": "", "model": "",
-                                   "api_key": str(current.get("api_key") or "")}
+                    # Keep whatever the user typed/selected even while the provider is off,
+                    # so a restart does not silently wipe the configuration.
+                    value_cloud = {"enabled": False,
+                                   "base_url": cloudllm.normalise(given.get("base_url") or current.get("base_url") or ""),
+                                   "model": str(given.get("model") or current.get("model") or "").strip()[:160],
+                                   "api_key": str(given.get("api_key") or "").strip() or str(current.get("api_key") or "")}
                 current_web = settings()["web"]
                 web_given = body.get("web") if isinstance(body.get("web"), dict) else {}
                 web_enabled = bool(web_given.get("enabled"))
@@ -245,27 +250,32 @@ class Handler(BaseHTTPRequestHandler):
                 if web_enabled and provider == "tavily" and not 8 <= len(web_key) <= 400:
                     raise ValueError("Tavily 搜索需要 8–400 字符的 API Key")
                 web_value = {"enabled": web_enabled, "search_provider": provider, "search_endpoint": endpoint,
-                             "search_api_key": web_key if web_enabled else "",
+                             "search_api_key": web_key,
                              "max_results": max(1, min(int(web_given.get("max_results") or 5), 10)),
                              "fetch_max_chars": max(200, min(int(web_given.get("fetch_max_chars") or 6000), 20000))}
-                limits_given = body.get("limits") if isinstance(body.get("limits"), dict) else {}
-                current_limits = settings().get("limits") or {}
-                limits = {}
-                for key, floor, label in (("max_tokens", 1000, "token 上限"),
-                                          ("max_seconds", 10, "时间上限"),
-                                          ("max_steps", 1, "步骤上限")):
-                    raw = limits_given.get(key, current_limits.get(key))
+                budgets_given = body.get("budgets") if isinstance(body.get("budgets"), dict) else {}
+                current_budgets = settings().get("budgets") or {}
+
+                def optional_budget(key, label, default=None):
+                    raw = budgets_given.get(key, current_budgets.get(key, default))
+                    if raw in (None, ""):
+                        return None
                     try:
-                        value_int = int(raw)
+                        number = int(raw)
                     except (TypeError, ValueError):
-                        raise ValueError(f"{label}必须是整数")
-                    if value_int < floor or value_int > 10_000_000:
-                        raise ValueError(f"{label}必须在 {floor}–10000000 之间")
-                    limits[key] = value_int
+                        raise ValueError(f"{label}必须是整数，或留空表示不限")
+                    if number <= 0:
+                        raise ValueError(f"{label}必须为正数，或留空表示不限")
+                    return number
+
+                tokens_k = optional_budget("tokens_k", "默认 token（k）", 60) or 60
+                budgets = {"tokens_k": tokens_k,
+                           "seconds": optional_budget("seconds", "默认时间"),
+                           "steps": optional_budget("steps", "默认步骤")}
                 if web_value["enabled"]:
                     webaccess.validate_search_config(web_value["search_provider"], web_value["search_endpoint"])
                 value = {"revision": uuid.uuid4().hex, "ollama_url": url, "model": model, "model_source": source, "cloud": value_cloud,
-                         "roles": cleaned_roles, "web": web_value, "limits": limits,
+                         "roles": cleaned_roles, "web": web_value, "budgets": budgets,
                          "routing": research_core.routing.clean(body.get("routing") or settings().get("routing"))}
                 write_json(ROOT / "config.json", value)
                 return self.send(200, masked_settings())

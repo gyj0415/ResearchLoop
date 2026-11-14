@@ -96,12 +96,10 @@ def platform_search(engine, args):
 
 registry.register_tool("web_search", web_search,
                        description="搜索外部网页信息，适合最新消息、陌生实体或需要来源核实时使用。",
-                       arguments={"query": "搜索关键词", "reason": "为什么需要搜索",
-                                  "max_results": 5, "recency": "any"}, required=["query", "reason"])
+                       arguments={"query": "搜索关键词", "max_results": 5, "recency": "any"}, required=["query"])
 registry.register_tool("web_fetch", web_fetch,
                        description="读取指定 http/https URL 的网页正文，用于确认搜索结果的原文。",
-                       arguments={"url": "要读取的 URL", "reason": "为什么需要读取", "max_chars": 6000},
-                       required=["url", "reason"])
+                       arguments={"url": "要读取的 URL", "max_chars": 6000}, required=["url"])
 registry.register_tool("remember_fact", remember_fact,
                        description="基于已有证据ID写入或确认研究事实记忆；必须附evidence_ids，不能将推测或检索失败后的判断写成事实。",
                        arguments={"predicate": "事实谓词", "object": "事实对象", "summary": "简短摘要",
@@ -113,5 +111,5 @@ registry.register_tool("get_memory_context", get_memory_context,
 registry.register_tool("platform_search", platform_search,
                        description="按平台检索（Bilibili、小红书、贴吧、微博、抖音、知乎）；公开接口优先，需登录的平台走站内限定搜索。",
                        arguments={"platform": "bilibili/xiaohongshu/tieba/weibo/douyin/zhihu",
-                                  "query": "检索关键词", "reason": "为什么需要该平台证据", "limit": 5},
-                       required=["platform", "query", "reason"])
+                                  "query": "检索关键词", "limit": 5},
+                       required=["platform", "query"])

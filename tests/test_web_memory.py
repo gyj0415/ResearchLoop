@@ -94,10 +94,24 @@ class WorkflowTests(unittest.TestCase):
                                     {"role": "reporter", "goal": "报告", "why": "汇总复核结果"}])
         self.assertEqual(stages[0]["why"], "先确认证据")
 
-    def test_unknown_role_is_rejected(self):
+    def test_unknown_role_becomes_a_custom_generalist_stage(self):
+        stages = workflow.validate([{"role": "planner", "goal": "规划"},
+                                    {"role": "wizard", "goal": "用自定义方法验证"}])
+        self.assertEqual(stages[1]["role"], "generalist")
+        self.assertEqual(stages[1]["label"], "wizard")
+
+    def test_workflow_can_have_eight_stages_and_longer_step_budgets(self):
+        stages = [{"role": "analyst", "goal": f"阶段{i + 1}", "max_steps": 12} for i in range(8)]
+        cleaned = workflow.validate(stages)
+        self.assertEqual(len(cleaned), 8)
+        self.assertEqual(cleaned[0]["max_steps"], 12)
+
+    def test_stage_tool_subset_must_belong_to_the_role(self):
         with self.assertRaises(ValueError):
-            workflow.validate([{"role": "planner", "goal": "规划"},
-                               {"role": "wizard", "goal": "实验"}])
+            workflow.validate([{"role": "planner", "goal": "规划", "tools": ["verify"]}])
+        cleaned = workflow.validate([{"role": "analyst", "goal": "分析",
+                                      "tools": ["literature", "web_search"]}])
+        self.assertEqual(cleaned[0]["tools"], ["literature", "web_search"])
 
 
 class SettingsMaskingTests(unittest.TestCase):
@@ -129,6 +143,9 @@ class RoleTests(unittest.TestCase):
         self.assertNotIn("finish", roles.tools_for("planner"))
         self.assertNotIn("finish", roles.tools_for("experimenter"))
         self.assertIn("finish", roles.tools_for("reporter"))
+        self.assertIn("finish", roles.tools_for("generalist"))
+        self.assertIn("literature", roles.tools_for("analyst"))
+        self.assertNotIn("experiment", roles.tools_for("analyst"))
 
 
 if __name__ == "__main__":
