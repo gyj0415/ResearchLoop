@@ -411,6 +411,13 @@ class ResearchEngine:
                                  "feasible=false 或 gap_fill.required 表示当前证据不足，不是终点：先换来源继续取证，"
                                  "达到要求的尝试后才能重新 plan 或 finish；每次运行都要以报告结束。"
                                  "如果需要多阶段编排，先调用design_workflow并写明每个阶段的设计理由。"}
+        if "design_workflow" in options:
+            prompt["instruction"] += ("规划阶段先判断问题需要的证据。定性、文献和概念比较只安排取证、分析、报告；"
+                                      "只有明确可执行的数值问题、指标和假设时才安排实验与复核。"
+                                      "实验角色没有finish权限；缺少假设时先注册。无论取证是否成功，最后安排reporter总结结论或证据缺口。")
+        if (run.get("active_agent") or {}).get("role") == "experimenter":
+            prompt["instruction"] += ("当前是实验阶段，不能调用finish。若还没有假设，先调用hypothesis注册可检验的指标与阈值；"
+                                      "再调用experiment实际运行。实验不可执行时保留原因，后续报告阶段再总结。")
         prompt['execution_context'] = {'workspace':str(self.folder/'workspace'), 'access_mode':run.get('access_mode','approval'),
                                        'available_shells':[name for name,path in engineering.shells().items() if path],
                                        'model_profiles':{name:conf for name,conf in (run.get('routing') or {}).get('profiles',{}).items() if conf.get('model')},
@@ -791,7 +798,9 @@ class ResearchEngine:
     def _loop(self, limit, mark_incomplete=True):
         allowed = self.allowed_tools()
         agent_id = (self.run.get("active_agent") or {}).get("id")
+        experiment_stage = (self.run.get("active_agent") or {}).get("role") == "experimenter"
         extension_key = f"{self.turn_id}:{agent_id or 'react'}"
+        rejected_decisions = 0
         while True:
             self.guard_pause()
             if self.cancelled.is_set():
@@ -801,7 +810,8 @@ class ResearchEngine:
             if self.steps_exhausted():
                 self.run["status"], self.run["stop_reason"] = "incomplete", "达到研究步骤上限，保留已有证据"
                 return
-            scoped = [step for step in steps if step.get("agent") == agent_id]
+            scoped = [step for step in steps if step.get("agent") == agent_id
+                      and not (experiment_stage and step.get("rejected_by_role"))]
             extensions = self.run.get("recovery_extensions", {}).get(extension_key, 0)
             pending_retry = self.run.get("pending_tool_retry")
             if len(scoped) >= int(limit) + extensions and not pending_retry:
@@ -830,21 +840,34 @@ class ResearchEngine:
                           "agent": agent_id, "role": (self.run.get("active_agent") or {}).get("role"),
                           "turn": self.turn_id, "status": "failed", "elapsed_seconds": 0,
                           "observation": {"error": str(error), "recovery": info, "instruction": "按错误修正后重新选择工具。"}}
+                if experiment_stage and isinstance(error, ValueError) and "模型两次返回无效决策" in str(error):
+                    failed["rejected_by_role"] = True
+                    rejected_decisions += 1
                 self.run["steps"].append(failed)
                 self.event("tool_result", f"决策失败：{error}", status="failed", step=failed)
                 if not info.get("repairable", True):
                     self.run["status"], self.run["stop_reason"] = "incomplete", info["message"]
                     return
+                if rejected_decisions >= 3:
+                    self.event("stage", "连续三次无效决策，转入后续阶段处理", status="skipped", level="warning")
+                    break
                 continue
             tool = decision.get("tool")
             if allowed is not None and tool not in allowed:
                 self.run.pop("pending_decision", None)
                 failed = {"id": f"s{len(self.run['steps'])+1}", "tool": tool, "status": "failed", "turn": self.turn_id,
                           "agent": agent_id, "role": (self.run.get("active_agent") or {}).get("role"), "args": decision.get("args", {}),
-                          "elapsed_seconds": 0, "observation": {"error": f"角色不可使用工具 {tool}"}}
+                          "elapsed_seconds": 0, "rejected_by_role": experiment_stage,
+                          "observation": {"error": f"角色不可使用工具 {tool}"}}
                 self.run["steps"].append(failed)
                 self.event("tool_result", "工具被角色边界拒绝", status="failed", step=failed)
+                if experiment_stage:
+                    rejected_decisions += 1
+                if rejected_decisions >= 3:
+                    self.event("stage", "连续三次越权选择，转入后续阶段处理", status="skipped", level="warning")
+                    break
                 continue
+            rejected_decisions = 0
             self._perform_tool(decision, retry=retry)
             if self.run["status"] in ("completed", "incomplete", "inconclusive", "cancelled"):
                 return
@@ -937,13 +960,18 @@ class ResearchEngine:
                     self.run.pop('pending_decision',None)
                 consumed.update(i for i,_ in peers)
                 continue
+            stage_tools = stage.get("tools")
+            if stage["role"] == "experimenter" and not self.run.get("hypotheses") and stage_tools:
+                stage_tools = list(dict.fromkeys([*stage_tools, "hypothesis"]))
             agent = activate(f"g{index + 1}", stage["role"], stage["goal"], stage.get("why", ""),
-                             stage.get("label", ""), stage.get("tools"), stage.get('model_tier','auto'))
+                             stage.get("label", ""), stage_tools, stage.get('model_tier','auto'))
             if agent["status"] in ("done", "completed"):
                 continue
             skip_reason = ""
-            if stage["role"] == "experimenter" and not self.run.get("hypotheses") and not self.run.get("plan"):
-                skip_reason = "尚无计划或假设，实验阶段无事可做"
+            if stage["role"] == "experimenter" and not self.run.get("hypotheses") and (
+                    not self.run.get("plan") or self.run.get("research_kind") in ("qualitative", "literature")
+                    or self.run.get("plan", {}).get("feasible") is False):
+                skip_reason = "研究方法无需数值实验，或尚无可执行的实验计划"
             elif stage["role"] == "verifier" and not any(
                     experiment.get("status") == "completed" and not experiment.get("verification")
                     for experiment in self.run.get("experiments", [])):
@@ -955,7 +983,11 @@ class ResearchEngine:
                 self.save()
                 continue
             self.event("stage", f"阶段 {agent['id']}（{stage.get('label') or stage['role']}）：{stage['goal']}", status="running")
-            self._loop(int(stage.get("max_steps", 3)), mark_incomplete=False)
+            stage_limit = int(stage.get("max_steps", 3))
+            if stage["role"] == "reporter" and (self.run.get("gap_fill") or {}).get("required"):
+                remaining = max(0, GAP_FILL_MIN - self.run["gap_fill"].get("attempts", 0))
+                stage_limit = max(stage_limit, remaining + 1)
+            self._loop(stage_limit, mark_incomplete=False)
             self.guard_pause()
             agent["steps"] = [s["id"] for s in self.run["steps"] if s.get("agent") == agent["id"] and s.get("turn") == self.turn_id]
             agent["status"] = "completed" if self.run["status"] == "completed" else "done"

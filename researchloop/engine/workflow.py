@@ -137,7 +137,9 @@ def plan(engine):
               "model_profiles": (run.get('routing') or {}).get('profiles',{}),
               "instruction": "只输出stages数组：阶段数量与划分由这个问题本身决定（1–8个），不要套用固定的四阶段模板。"
                              "每个阶段给出role、goal、max_steps；可以为阶段取自定义名称（role填自定义名，会作为通用阶段执行），"
-                             "也可以用 tools 限定该阶段只使用哪些工具。定性/文献问题可以没有实验；需要数值实验时应有experimenter，复核与报告在实验之后。"
+                             "也可以用 tools 限定该阶段只使用哪些工具。先判断问题所需证据：定性、文献、概念比较等无需可执行数值检验的问题，应只安排取证、分析和报告，不安排experimenter/verifier；不要为凑阶段而用模拟代替真实文献。"
+                             "只有存在可执行的数值问题、明确指标及可检验假设时才安排experimenter，随后安排verifier与reporter；若假设尚未注册，实验阶段必须允许hypothesis工具先注册，不能直接finish。"
+                             "即使取证失败，也应继续可行的取证步骤，最后交给reporter总结已尝试来源和证据缺口。"
                              "每个阶段必须写 why：为什么需要、解决什么、为什么这个顺序。可用 model_tier 选择已配置的 light/strong，auto 沿用默认路由。"
                              "tools 是可选的角色工具子集；留空数组表示不限制。报告阶段须使用 reporter 且保留 finish，不能用 inspect。"
                              "独立取证/分析任务可放进相邻同名 parallel_group（每组最多3个），实际由独立子Agent并行；指定 tools 的阶段和报告阶段不能加入并行组。"
