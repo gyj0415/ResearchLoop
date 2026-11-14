@@ -26,7 +26,7 @@ function icon(name) { return `<svg viewBox="0 0 24 24" fill="none" stroke="curre
 $$('[data-icon]').forEach(el => el.innerHTML = icon(el.dataset.icon));
 const statuses = {queued:'排队中',running:'研究中',completed:'已完成',failed:'调用失败',cancelled:'已停止',budget_stopped:'预算停止',interrupted:'服务重启中断'};
 let state = null, run = null, selectedId = localStorage.getItem('rl-selected-run') || '', page = 'workspace';
-let evidenceExperiment = '', evidenceClaim = '', evidenceKey = '', lastRunStamp = '', refreshing = false, lastBudgetStamp = 0;
+let evidenceExperiment = '', evidenceClaim = '', evidenceKey = '', lastRunStamp = '', lastBudgetStamp = 0;
 let modelStatus = {available:false,models:[]};
 const percent = n => n == null ? '—' : `${(n*100).toFixed(1)}%`;
 const number = n => new Intl.NumberFormat('en-US').format(n || 0);
@@ -76,7 +76,7 @@ async function refreshOnce(force=false) {
     if (oldOptions !== options) $('#run-select').innerHTML = options;
     $('#run-select').value = selectedId;
     const summary = state.runs.find(r => r.id === selectedId);
-    if (selectedId && (force || !run || run.id !== selectedId || summary?.status === 'running' || ['queued','pausing'].includes(summary?.status) || run.status !== summary?.status)) {
+    if (selectedId && (force || !run || run.id !== selectedId || summary?.status === 'running' || ['queued','pausing'].includes(summary?.status) || run.status !== summary?.status || run.updated_at !== summary?.updated_at)) {
       const requestedId=selectedId,next=await api(`/api/runs/${requestedId}`);
       if(requestedId!==selectedId){refreshNeeded=true;return;}
       run=next;lastBudgetStamp=Date.now();
@@ -85,7 +85,7 @@ async function refreshOnce(force=false) {
     }
     if (!selectedId) run = null;
     renderTop(); renderMetrics(); renderMemory(); renderData();
-      const stamp = run ? `${run.id}:${run.updated_at}` : 'empty';
+      const stamp = run ? JSON.stringify([run.id,run.updated_at,run.status,run.finished_at,run.report,run.turns]) : 'empty';
     if (force || stamp !== lastRunStamp) { lastRunStamp = stamp; renderRun(); }
     renderBudget();
   } catch(error) { $('#notice').textContent = `本地服务连接异常：${error.message}`; $('#notice').classList.remove('hidden'); }

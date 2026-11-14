@@ -21,7 +21,7 @@ from researchloop.engine import roles
 from researchloop.engine import workflow as workflow_module
 from researchloop.engine import extratools  # registers web_search/web_fetch/remember_fact/get_memory_context
 from researchloop.engine import doctools  # registers read_docx/read_pptx/read_pdf
-from researchloop import facts, memory, reliability, llmjson
+from researchloop import facts, memory, reliability, llmjson, reporting
 from researchloop.ollama import Budget, BudgetError
 from . import tools
 from . import protocol, routing, history
@@ -67,7 +67,8 @@ ARGUMENTS = {
     "experiment": ({"hypothesis_id": {"type": "string"}, "code": {"type": "string"}}, ["hypothesis_id", "code"]),
     "verify": ({"experiment_id": {"type": "string"}}, ["experiment_id"]),
     "reflect": ({"next_action": {"type": "string", "enum": ["revise", "finish"]}, "reason": {"type": "string"}}, ["next_action", "reason"]),
-    "finish": ({"conclusion": {"type": "string"}, "citations": {"type": "array", "items": {"type": "string"}}, "lesson": {"type": "string"}}, ["conclusion", "citations", "lesson"]),
+    "finish": ({"conclusion": {"type": "string"}, "citations": {"type": "array", "items": {"type": "string"}},
+                "lesson": {"type": "string"}, "manuscript": reporting.MANUSCRIPT_SCHEMA}, ["conclusion", "citations", "lesson"]),
     "web_search": ({"query": {"type": "string"},
                     "max_results": {"type": "integer"}, "recency": {"type": "string", "enum": ["any", "day", "week", "month", "year"]}},
                    ["query"]),
@@ -298,6 +299,7 @@ class ResearchEngine:
                   "instruction": "本次只生成current_action的参数JSON，不要返回tool/reason/args外壳；必须只使用args_schema中的字段名。metric必须是一个简短英文标识符，实验代码须使用冻结的metric名称。"}
         system = SYSTEM.replace('自主选择下一项工具；严格返回 {"tool":"工具名","reason":"选择依据","args":{工具参数}}，不要把参数直接放在顶层。', "") + f"\n当前控制器已检查前置条件，进入{tool}。只返回该工具参数，不要选择其他工具。"
         if tool == "finish":
+            system += "\n" + reporting.WRITING_GUIDE
             verified = [e for e in self.run["experiments"] if e.get("verification")]
             if verified:
                 ids = "、".join(e["id"] for e in verified)
@@ -391,9 +393,20 @@ class ResearchEngine:
                                  "达到要求的尝试后才能重新 plan 或 finish；每次运行都要以报告结束。"
                                  "如果需要多阶段编排，先调用design_workflow并写明每个阶段的设计理由。"}
         correction = ""
+        report_stage = "finish" in options and (options == ["finish"] or (run.get("active_agent") or {}).get("role") == "reporter")
+        if report_stage:
+            # Report prose needs content and actual measurements, not source titles alone.
+            prompt["report_evidence"] = [{"id": source["id"], "title": source.get("title"),
+                                          "scope": source.get("evidence_scope"),
+                                          "excerpt": str(source.get("text") or source.get("content") or source.get("abstract") or "")[:400]}
+                                         for source in run["sources"][-6:]]
+            prompt["report_measurements"] = [{key: experiment.get(key) for key in
+                                               ("id", "hypothesis_id", "result", "check", "verification", "error")}
+                                              for experiment in run["experiments"][-6:]]
+        writing = "\n" + reporting.WRITING_GUIDE if "finish" in options else ""
         for attempt in range(2):
             try:
-                parsed, item = self.complete(SYSTEM + correction, prompt, schema,
+                parsed, item = self.complete(SYSTEM + writing + correction, prompt, schema,
                                              purpose="agent_step" if attempt == 0 else "agent_step_retry")
             except (BudgetError, history.Paused):
                 raise
@@ -636,7 +649,8 @@ class ResearchEngine:
                     self.run["stop_reason"] = self.run.get("stop_reason") or "达到步骤或预算上限，已生成证据缺口报告"
             if turn is not None:
                 turn["status"], turn["finished_at"] = self.run["status"], self.run["finished_at"]
-                turn["conclusion"] = str(report_now.get("conclusion", ""))[:1200]
+                turn["conclusion"] = str(report_now.get("conclusion", ""))
+                turn["report"] = copy.deepcopy(report_now)
             self.write_report()
             if self.run["status"] == "completed" and self.run.get("memory_mode") != "disabled" and report_now.get("lesson"):
                 try:
@@ -1018,6 +1032,9 @@ class ResearchEngine:
                 for scope in (source.get("evidence_scope") or "" for source in run["sources"]))
             report = {"conclusion": str(args.get("conclusion", "")), "citations": citations,
                       "lesson": str(args.get("lesson", ""))}
+            manuscript = reporting.validate_manuscript(args.get("manuscript"), citations)
+            if manuscript:
+                report["manuscript"] = manuscript
 
             if kind in ("qualitative", "literature", "mixed"):
                 if substantive:
@@ -1054,66 +1071,10 @@ class ResearchEngine:
                 "recovery": {"reason": reason, "next_steps": ["修复不可用服务的配置，或从调用节点分支改用其他来源", "依据真实证据重新核验问题前提与结论"]}}
 
     def write_report(self):
-        report = self.run.get("report", {})
-        run = self.run
-        lines = [f"# {self.question_text()}", f"\n状态：{run['status']}。",
-                 "\n## Agent分析",
-                 report.get("conclusion") or run.get("stop_reason") or run.get("error") or "尚未形成完整结论。"]
-        if run.get("workflow"):
-            workflow = run["workflow"]
-            lines.append(f"\n## 工作流（{workflow.get('source', 'default')}）")
-            if workflow.get("reason"):
-                lines.append(f"设计理由：{workflow['reason']}")
-            for stage in workflow.get("stages", []):
-                why = f"；理由：{stage['why']}" if stage.get("why") else ""
-                lines.append(f"- {stage['role']}（上限 {stage.get('max_steps', 3)} 步）：{stage['goal']}{why}")
-        if run.get("agents"):
-            lines.append("\n## 子 Agent")
-            for agent in run["agents"]:
-                lines.append(f"- {agent.get('id')} / {agent.get('role')}：{agent.get('model')}"
-                             f"（{agent.get('model_source')}），{len(agent.get('steps') or [])} 步，{agent.get('status')}")
-        lines.append("\n## 预注册假设与固定判据")
-        for hypothesis in run["hypotheses"]:
-            lines.append(f"- {hypothesis['id']}: {hypothesis['statement']}；{hypothesis['metric']} "
-                         f"{hypothesis['relation']} {hypothesis['threshold']}；控制：{hypothesis['controls']}")
-        if run["experiments"]:
-            lines.append("\n## 实际实验与复核")
-            for experiment in run["experiments"]:
-                lines.append(f"- {experiment['id']} / {experiment['hypothesis_id']}："
-                             + json.dumps({key: experiment.get(key) for key in
-                                           ('status', 'result', 'check', 'verification', 'error')},
-                                          ensure_ascii=False))
-        lines.append("\n## 文献与材料")
-        lines.extend(f"- {source['id']}: {source['title']} {source.get('url', '')}（{source['evidence_scope']}）"
-                     for source in run["sources"])
-        lines.extend(f"- {asset['id']}: {asset['name']} SHA256={asset['sha256']}" for asset in run["assets"])
-        gaps = report.get("evidence_gaps") or []
-        if gaps:
-            lines.append("\n## 证据缺口")
-            lines.extend(f"- {gap}" for gap in gaps)
-        if report.get("recovery"):
-            lines.append("\n## 可继续的操作")
-            lines.extend(f"- {step}" for step in report["recovery"].get("next_steps", []))
-        if run.get("draft_report"):
-            lines.extend(["\n## 未通过校验的草稿（不作为研究结论）",
-                          json.dumps(run["draft_report"], ensure_ascii=False)])
-        kind = run.get("research_kind") or "quantitative"
-        limitations = {
-            "qualitative": "定性研究：结论受检索覆盖与正文可获取性限制；元数据不等于结论；没有平台或受众数据时不做外推。",
-            "literature": "文献研究：只覆盖可检索引文；标题与摘要不是全文结论；相关记录比例是保守下界。",
-            "simulation": "模拟研究：结论只适用于声明的生成机制；独立重跑不等于统计显著性。",
-            "mixed": "混合研究：不同证据层级不能相加；缺少真实数据时只报告证据缺口。",
-            "quantitative": "本地可计算任务原型；结论受数据与实验设计限制；独立重跑不等于统计显著性。",
-        }[kind]
-        lines.extend(["\n## 成本", json.dumps(self.budget.snapshot(), ensure_ascii=False),
-                      "\n## 局限", limitations,
-                      "\n## 复现",
-                      "experiments/<id>/explore/含冻结code.py、input.json和result.json；source/为当时源码。"
-                      "使用匹配环境运行：python source/researchloop/engine/worker.py experiments/<id>/explore/input.json。"])
-        current = "\n\n".join(lines)
+        current = reporting.markdown(reporting.document(self.run))
         (self.folder / f"report-{self.turn_id}.md").write_text(current, encoding="utf-8")
         sections = []
-        for turn in run.get("turns", []):
+        for turn in self.run.get("turns", []):
             file = self.folder / f"report-{turn['id']}.md"
             if file.exists():
                 sections.append(file.read_text(encoding="utf-8"))
@@ -1281,4 +1242,4 @@ def _builtin_handler(name):
 
 
 for _name in ("plan", "inspect", "literature", "read", "hypothesis", "experiment", "verify", "reflect", "finish"):
-    registry.register_tool(_name, _builtin_handler(_name))
+    registry.register_tool(_name, _builtin_handler(_name), required=ARGUMENTS[_name][1])

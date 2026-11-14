@@ -2,3 +2,5 @@
 # Operator scenario (researchloop/scenarios/operator and src/gates.py): numpy, torch.
 numpy
 torch
+# Research report PDF export (no TeX compiler or model call required).
+reportlab>=4.2,<5

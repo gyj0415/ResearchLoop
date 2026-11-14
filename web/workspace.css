@@ -68,6 +68,14 @@ footer a{color:var(--muted)}
 .turn-answer-heading strong{font-size:14px;font-weight:600;color:var(--ink);margin-right:auto}
 .turn-answer>p{font-size:13px;line-height:1.95;margin:15px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
 .turn-answer>p.muted{color:var(--muted)}
+.report-export{display:flex;align-items:center;gap:0;max-width:100%}
+.report-export select{width:auto;min-width:78px;border-radius:8px 0 0 8px;font-size:12px;padding:9px 10px;background:var(--card,#fff);border:1px solid var(--line);color:var(--ink)}
+.report-export .secondary-button{border-radius:0 8px 8px 0;margin-left:-1px;white-space:nowrap}
+.paper-preview{margin-top:20px;border-top:1px solid var(--line);padding-top:14px}
+.paper-preview summary{font-size:12px;color:var(--accent);cursor:pointer}
+.paper-preview section{margin:20px 0}
+.paper-preview h3{font-size:14px;margin:0 0 9px}
+.paper-preview p{font-size:13px;line-height:1.95;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
 .session-turn-history{border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 16px}
 .session-turn-history>summary{padding:13px 0;font-size:11px;color:var(--muted);cursor:pointer}
 .session-turn-history>.turn-block{margin:0 0 14px}

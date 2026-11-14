@@ -74,7 +74,7 @@
       <div class="session-head">
         <div class="session-breadcrumb"><button type="button" class="small-link" id="session-back">← 研究工作台</button><span id="session-status" class="pill subtle">—</span></div>
         <div class="session-head-main"><h1 id="session-title">研究会话</h1><p class="session-question" id="session-question"></p></div>
-        <div class="session-head-side"><button type="button" class="secondary-button hidden" id="session-pause">暂停研究</button><button type="button" class="primary-button hidden" id="session-resume">继续研究</button><a class="secondary-button" id="session-report">下载报告</a><a class="secondary-button" id="session-export">导出记录</a><button type="button" class="secondary-button" id="session-archive">归档</button></div>
+        <div class="session-head-side"><button type="button" class="secondary-button hidden" id="session-pause">暂停研究</button><button type="button" class="primary-button hidden" id="session-resume">继续研究</button><div class="report-export" id="report-export"><select id="session-report-format" aria-label="报告格式"><option value="pdf">PDF</option><option value="tex">LaTeX</option><option value="md">Markdown</option></select><a class="secondary-button" id="session-report">导出报告</a></div><a class="secondary-button" id="session-export">导出记录</a><button type="button" class="secondary-button" id="session-archive">归档</button></div>
       </div>
       <p id="session-control-note" class="session-control-note hidden" role="status"></p><div class="metric-grid" id="metrics"></div>
       <div class="session-tabs" role="tablist" aria-label="会话内容">

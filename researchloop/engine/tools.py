@@ -22,7 +22,7 @@ TOOLS = [
     {"name": "experiment", "description": "为已注册假设运行自主编写的受约束Python。提供np,rng,load_csv(id),load_text(id),emit_result。不得读取任意路径或联网。先实际计算metrics，再emit_result({'metrics':metrics})。", "arguments": {"hypothesis_id": "h1", "code": "实验Python代码"}},
     {"name": "verify", "description": "冻结实验代码，用未向模型暴露的新随机种子重跑，固定代码按已注册判据验证。", "arguments": {"experiment_id": "x1"}},
     {"name": "reflect", "description": "仅在有已复核实验时使用：决定修正假设继续研究，或结束并报告负/正结果。", "arguments": {"next_action": "revise/finish", "reason": "基于证据的判断"}},
-    {"name": "finish", "description": "以真实证据引用结束研究；没有经过独立重跑的实验只能给出未完成报告。", "arguments": {"conclusion": "结论及局限", "citations": ["h1", "x1", "p1"], "lesson": "有条件的研究方法经验"}},
+    {"name": "finish", "description": "以真实证据引用结束研究，在manuscript中按摘要、引言、方法、结果、讨论和结论撰写研究报告；没有经过独立重跑的定量实验只能给出未完成报告。", "arguments": {"conclusion": "简洁结论及局限", "citations": ["h1", "x1", "p1"], "lesson": "有条件的研究方法经验", "manuscript": {"title": "报告题目", "abstract": "问题、方法、发现与边界", "introduction": "问题背景与已有证据", "methods": "实际采用的方法与控制", "results": "真实结果与证据ID", "discussion": "解释、反例与局限", "conclusion": "直接回答研究问题"}}},
 ]
 
 

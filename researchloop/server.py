@@ -24,6 +24,7 @@ from . import cloudllm
 from . import db
 from . import webaccess
 from . import memory
+from . import reporting
 from .sessions import SessionManager
 
 SERVICE = SimpleNamespace(active=None, preparing=None)
@@ -116,6 +117,17 @@ class Handler(BaseHTTPRequestHandler):
                     report = RUNS / run_id / "report.md"
                     if not report.exists():
                         return self.send(404, {"error": "研究尚未结束，报告未生成"})
+                    export_format = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("format", ["md"])[0]
+                    if export_format not in ("md", "tex", "pdf"):
+                        raise ValueError("报告格式仅支持 md、tex 或 pdf")
+                    if export_format in ("tex", "pdf"):
+                        if not run.get("report") or run.get("status") in ("running", "queued", "pausing"):
+                            return self.send(404, {"error": "本轮研究报告尚未生成"})
+                        doc = reporting.document(run)
+                        content = reporting.latex(doc) if export_format == "tex" else reporting.pdf(doc)
+                        kind = "application/x-tex; charset=utf-8" if export_format == "tex" else "application/pdf"
+                        return self.send(200, content, kind,
+                                         {"Content-Disposition": f'attachment; filename="research-{run_id}.{export_format}"'})
                     return self.send(200, report.read_bytes(), "text/markdown; charset=utf-8",
                                      {"Content-Disposition": 'attachment; filename="research-report.md"'})
                 if path.endswith("/export") and run.get("domain") == "research":

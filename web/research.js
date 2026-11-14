@@ -152,8 +152,8 @@ function renderSessionLayout(value){
   $('#session-question').textContent=[Number.isNaN(created.getTime())?'':created.toLocaleString('zh-CN',{month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}),value.turns?.length?`${value.turns.length} 轮对话`:'历史运行',value.id].filter(Boolean).join(' · ');
   $('#session-step-count').textContent=value.steps?.length||0;
   $('#session-evidence-count').textContent=(value.sources?.length||0)+(value.assets?.length||0)+(value.experiments?.length||0);
-  $('#session-report').href=`/api/runs/${value.id}/report`;$('#session-export').href=`/api/runs/${value.id}/export`;
-  const pending=['running','queued','pausing'].includes(value.status);$('#session-report').classList.toggle('hidden',pending||value.domain!=='research');$('#session-archive').disabled=pending;
+  $('#session-report').href=`/api/runs/${value.id}/report?format=${$('#session-report-format').value}`;$('#session-export').href=`/api/runs/${value.id}/export`;
+  const pending=['running','queued','pausing'].includes(value.status);$('#report-export').classList.toggle('hidden',pending||value.domain!=='research'||!value.report);$('#session-archive').disabled=pending;
   const isResearch=value.domain==='research',paused=value.status==='paused';
   $('#session-pause').classList.toggle('hidden',!isResearch||!pending);$('#session-pause').disabled=value.status==='pausing';$('#session-pause').textContent=value.status==='pausing'?'正在暂停…':value.status==='queued'?'暂停排队':'暂停研究';
   $('#session-resume').classList.toggle('hidden',!isResearch||!paused);$('#session-resume').disabled=sessionActionIds.has(value.id);
@@ -245,15 +245,19 @@ function renderSessionTurns(run){
   renderSessionLayout(run);
   if(!run||run.domain!=='research'){box.innerHTML='';return;}
   const turns=run.turns?.length?run.turns:[{question:run.question,status:run.status,conclusion:run.report?.conclusion||run.stop_reason||run.error||''}];
-  const stamp=JSON.stringify([run.id,turns]);if(box._turnStamp===stamp)return;
-  const historyOpen=box.querySelector('.session-turn-history')?.open;box._turnStamp=stamp;
+  const stamp=JSON.stringify([run.id,run.status,turns,run.report]);if(box._turnStamp===stamp)return;
+  const historyOpen=box.querySelector('.session-turn-history')?.open;
+  const paperOpen=new Set([...box.querySelectorAll('.paper-preview[open]')].map(el=>el.dataset.turn));box._turnStamp=stamp;
   const card=(turn,index)=>{
-    const status=statuses[turn.status]||turn.status||'',question=index>0||turn.question!==run.question;
-    return `<article class="turn-block">${question?`<div class="turn-question"><span class="turn-role">追问</span><p>${esc(turn.question||'')}</p></div>`:''}<div class="turn-answer"><div class="turn-answer-heading"><strong>${index===turns.length-1?'研究结果':'历史结果'}</strong><span>第 ${index+1} 轮</span><span class="pill subtle">${esc(status)}</span></div><p class="${turn.conclusion?'':'muted'}">${esc(turn.conclusion||(turn.status==='queued'?'排队等待运行名额。':turn.status==='running'?'研究正在进行，执行记录中会显示最新步骤。':'本轮尚未形成结论。'))}</p></div></article>`;
+    const latest=index===turns.length-1,statusKey=latest?run.status:turn.status,status=statuses[statusKey]||statusKey||'',question=index>0||turn.question!==run.question;
+    const report=latest?run.report:turn.report,paper=report?.manuscript,conclusion=report?.conclusion||turn.conclusion;
+    const manuscript=paper?`<details class="paper-preview" data-turn="${index}" ${paperOpen.has(String(index))?'open':''}><summary>阅读全文</summary>${[['摘要',paper.abstract],['研究问题与背景',paper.introduction],['研究方法',paper.methods],['研究结果',paper.results],['讨论与局限',paper.discussion],['结论',paper.conclusion]].filter(([,text])=>text).map(([title,text])=>`<section><h3>${esc(title)}</h3><p>${esc(text)}</p></section>`).join('')}</details>`:'';
+    return `<article class="turn-block">${question?`<div class="turn-question"><span class="turn-role">追问</span><p>${esc(turn.question||'')}</p></div>`:''}<div class="turn-answer"><div class="turn-answer-heading"><strong>${latest?'研究结果':'历史结果'}</strong><span>第 ${index+1} 轮</span><span class="pill subtle">${esc(status)}</span></div><p class="${conclusion?'':'muted'}">${esc(conclusion||(statusKey==='queued'?'排队等待运行名额。':statusKey==='running'?'研究正在进行，执行记录中会显示最新步骤。':'本轮尚未形成结论。'))}</p>${manuscript}</div></article>`;
   };
   box.innerHTML=(turns.length>1?`<details class="session-turn-history" ${historyOpen?'open':''}><summary>此前 ${turns.length-1} 轮对话</summary>${turns.slice(0,-1).map(card).join('')}</details>`:'')+card(turns.at(-1),turns.length-1);
 }
 const baseTurnsRun=renderRun;
+$('#session-report-format').addEventListener('change',()=>{if(run)$('#session-report').href=`/api/runs/${run.id}/report?format=${$('#session-report-format').value}`;});
 renderRun=function(){baseTurnsRun();renderSessionTurns(run);};
 $$('[data-session-tab]').forEach(button=>{
   button.addEventListener('click',()=>setSessionTab(button.dataset.sessionTab));
