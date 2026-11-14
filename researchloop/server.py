@@ -36,6 +36,7 @@ def summary(run):
     keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "model_source", "provider", "archived", "archived_at", "updated_at", "queue_wait_seconds", "budget_enabled", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
     result = {k: run.get(k) for k in keys}
     result["domain"] = run.get("domain", "unknown")
+    result.update(subagent_count=len(run.get('subagents',[])),pending_approval_count=sum(r.get('status')=='pending' for r in run.get('approval_requests',[])))
     if run.get("domain") == "research":
         result.update(question=run["question"], experiment_count=len(run["experiments"]),
                       verified_count=sum(bool(e.get("verification")) for e in run["experiments"]),
@@ -92,10 +93,10 @@ class Handler(BaseHTTPRequestHandler):
                     execution["running_runs"].append(SERVICE.active)
                 active = execution["running_runs"] or execution["queued_runs"]
                 return self.send(200, {"active_run": active[0] if active else None, **execution, "runs": [summary(r) for r in list_runs()],
-                    "settings": masked_settings(), "version": __version__, "research_tools": RESEARCH_TOOLS,
+                    "settings": masked_settings(), "version": __version__, "research_tools": research_registry.tools(),
                     "research_memory": research_core.memory_state(), "memory_system": memory.state()})
             if path == "/api/research/tools":
-                return self.send(200, {"tools": RESEARCH_TOOLS, "registered": research_registry.tools()})
+                return self.send(200, {"tools": research_registry.tools(), "registered": research_registry.tools()})
             if path == "/api/memory":
                 return self.send(200, memory.state())
             if path == "/api/roles":
@@ -113,6 +114,15 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/runs/"):
                 run_id = path.split("/")[3]
                 run = read_json(run_path(run_id))
+                parts=path.strip('/').split('/')
+                if len(parts)==5 and parts[3]=='subagents':
+                    child_id=parts[4]
+                    if not child_id.startswith('sa') or not child_id[2:].isdigit():
+                        raise ValueError('子 Agent ID 无效')
+                    child=read_json(RUNS/run_id/'subagents'/child_id/'run.json')
+                    if not child:
+                        return self.send(404,{'error':'子 Agent 记录不存在'})
+                    return self.send(200,child)
                 if path.endswith("/report") and run.get("domain") == "research":
                     report = RUNS / run_id / "report.md"
                     if not report.exists():
@@ -133,11 +143,17 @@ class Handler(BaseHTTPRequestHandler):
                 if path.endswith("/export") and run.get("domain") == "research":
                     buffer = io.BytesIO()
                     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-                        for file in (RUNS / run_id).rglob("*"):
-                            if file.is_file() and "__pycache__" not in file.parts:
+                        ignored={'.git','.venv','node_modules','.cache','.tmp','.packages','__pycache__'}
+                        for file in research_core.history._files(RUNS/run_id,ignored):
+                            if file.is_file() and not file.is_symlink() and file.resolve().is_relative_to((RUNS/run_id).resolve()):
                                 archive.write(file, file.relative_to(RUNS / run_id))
+                        archive.writestr('EXPORT-NOTES.txt','Dependencies and caches (.venv, .packages, node_modules, .cache, .tmp, .git) are excluded. Recreate the matching toolchain before replay. Shell commands run with host user privileges, not in an OS sandbox.\n')
                     return self.send(200, buffer.getvalue(), "application/zip",
                                      {"Content-Disposition": f'attachment; filename="research-{run_id}.zip"'})
+                run['subagent_live']=[]
+                for child in run.get('subagents',[]):
+                    saved=read_json(RUNS/run_id/'subagents'/child['id']/'run.json') or {}
+                    run['subagent_live'].append({key:saved.get(key) for key in ('subagent_id','status','updated_at','budget','model','model_tier')})
                 return self.send(200, run)
             relative = "index.html" if path == "/" else path.lstrip("/")
             target = (WEB / relative).resolve()
@@ -336,6 +352,64 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("旧版检索示例已移除；请通过 /api/research 提交研究问题")
             if path.startswith("/api/runs/") and path.endswith("/pause"):
                 return self.send(202, SESSIONS.pause(path.split("/")[3]))
+            if path.startswith('/api/runs/') and path.endswith('/approve'):
+                return self.send(200,SESSIONS.approve(path.split('/')[3],body.get('request_id'),body.get('decision')))
+            if path.startswith('/api/runs/') and path.endswith(('/retry','/recover')):
+                with LOCK:
+                    if SERVICE.active:
+                        raise ValueError('旧版算子任务正在运行')
+                    run_id=path.split('/')[3]
+                    existing=read_json(run_path(run_id))
+                    if existing.get('domain')!='research':
+                        raise ValueError('仅支持研究会话')
+                    folder=RUNS/run_id
+                    is_retry=path.endswith('/retry')
+                    if not is_retry:
+                        SESSIONS.assert_idle(run_id)
+                        if existing.get('status') in ('running','queued','pausing'):
+                            raise ValueError('请先暂停研究')
+                    enabled=body.get('budget_enabled',True)
+                    if not isinstance(enabled,bool):
+                        raise ValueError('budget_enabled 必须为布尔值')
+                    def limit(key,default):
+                        raw=body.get(key,default)
+                        if raw in (None,''):
+                            return None
+                        if not isinstance(raw,int) or isinstance(raw,bool) or raw<=0:
+                            raise ValueError('预算须为正整数或留空表示不限')
+                        return raw
+                    tokens=limit('token_limit',30000) if enabled else None
+                    seconds=limit('seconds_limit',None) if enabled else None
+                    steps=limit('max_steps',12) if enabled else None
+                    if is_retry:
+                        existing,folder=research_core.history.retry(existing,folder,str(body.get('node_id') or ''))
+                        if body.get('question'):
+                            existing['branch_note']+=' 用户补充：'+str(body['question'])[:2000]
+                        existing.update(budget_enabled=enabled,token_limit=tokens,seconds_limit=seconds,max_steps=steps)
+                        engine=research_core.resume_paused(existing,folder)
+                    elif existing.get('status')=='paused':
+                        # Increment the current turn's allowance without refunding any spend.
+                        spent=existing.get('budget') or {}
+                        existing.update(budget_enabled=enabled,
+                            token_limit=(spent.get('total_tokens',0)+tokens) if tokens is not None else None,
+                            seconds_limit=(spent.get('elapsed_seconds',0)+seconds) if seconds is not None else None,
+                            max_steps=(len([s for s in existing.get('steps',[])[existing.get('branch_step_start',0):] if s.get('turn','t1')==(existing.get('turns') or [{'id':'t1'}])[-1]['id']])+steps) if steps is not None else None)
+                        engine=research_core.resume_paused(existing,folder)
+                    else:
+                        existing['budget_enabled']=enabled
+                        direction=str(body.get('question') or '').strip()
+                        question=existing.get('current_question') or existing['question']
+                        if direction:
+                            question+='\n继续要求：'+direction
+                        engine=research_core.resume(existing,folder,question,
+                                                     token_limit=tokens,seconds_limit=seconds,max_steps=steps)
+                        # Null means unlimited in this explicit UI action, not "keep old limit".
+                        engine.run.update(token_limit=tokens,seconds_limit=seconds,max_steps=steps)
+                        engine.budget.token_limit,engine.budget.seconds_limit=tokens,seconds
+                    engine.run.setdefault('recovery_actions',[]).append({'at':now(),'action':'retry' if is_retry else 'continue',
+                        'budget_enabled':enabled,'additional_tokens':tokens,'additional_seconds':seconds,'additional_steps':steps})
+                    launch_research(engine)
+                return self.send(202,summary(engine.run))
             if path.startswith("/api/runs/") and path.endswith(("/resume", "/fork")):
                 with LOCK:
                     if SERVICE.active:
@@ -423,6 +497,9 @@ def serve(host="127.0.0.1", port=8767):
         elif run["status"] in ("running", "pausing"):
             run["status"] = "interrupted"
             run["stop_reason"] = "服务重启，保留此前已写入的实验记录；未继续调用模型"
+            for approval in run.get('approval_requests',[]):
+                if approval.get('status')=='pending':
+                    approval.update(status='cancelled',resolved_at=now(),reason='服务重启，未执行该操作')
             write_json(run_path(run["id"]), run)
     server = ThreadingHTTPServer((host, port), Handler)
     print(f"ResearchLoop: http://{host}:{port}", flush=True)

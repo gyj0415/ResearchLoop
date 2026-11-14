@@ -2,6 +2,19 @@
 from researchloop import storage, reliability
 
 
+def profile(engine, tier):
+    if tier == 'auto':
+        return None
+    if tier not in ('light','strong'):
+        raise ValueError('模型档位只能是 auto、light 或 strong')
+    conf = ((engine.run.get('routing') or {}).get('profiles') or {}).get(tier) or {}
+    if not conf.get('model'):
+        raise ValueError(f'设置中尚未配置 {tier} 模型，请配置后再编排该档位')
+    if conf.get('model_source') == 'cloud' and not storage.settings()['cloud'].get('enabled'):
+        raise ValueError('该档位使用云端模型，但云端未启用')
+    return conf
+
+
 def clean(value):
     value = value if isinstance(value, dict) else {}
     result = {"enabled": bool(value.get("enabled")), "profiles": {}}
@@ -18,14 +31,19 @@ def choose(engine, purpose, prompt):
     model, source, role, agent = engine.active_identity()
     policy = engine.run.get("routing") or {}
     tier, reason = "default", "沿用当前角色或会话模型"
-    if policy.get("enabled"):
+    requested = (engine.run.get('active_agent') or {}).get('model_tier') or engine.run.get('model_tier','auto')
+    explicit = profile(engine, requested)
+    if explicit:
+        tier, model, source = requested, explicit['model'], explicit.get('model_source','local')
+        reason = '工作流或工具显式指定模型档位'
+    elif policy.get("enabled"):
         failed = bool(engine.run.get("decision_feedback")) or bool(
             engine.run.get("steps") and engine.run["steps"][-1].get("status") == "failed")
         complex_work = purpose.endswith("retry") or failed or role in ("experimenter", "verifier", "reporter")
         complex_work |= bool(engine.run.get("plan") and not engine.run.get("hypotheses"))
         tier = "strong" if complex_work else "light"
         reason = "修复失败、设计实验或核对结论" if complex_work else "材料检查、检索与常规调度"
-        if engine.budget.token_limit - engine.budget.used < 16000 and not failed:
+        if engine.budget.token_limit is not None and engine.budget.token_limit - engine.budget.used < 16000 and not failed:
             tier, reason = "light", "剩余 token 较少，优先轻量档；仍受调用预留约束"
         conf = (policy.get("profiles") or {}).get(tier) or {}
         if conf.get("model"):

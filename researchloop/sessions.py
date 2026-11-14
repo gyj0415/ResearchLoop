@@ -25,6 +25,13 @@ class SessionManager:
         if self.busy(run_id):
             raise ValueError("该会话已经在运行或排队，不能重复启动")
 
+    def approve(self,run_id,request_id,decision):
+        with storage.LOCK:
+            job=self.jobs.get(run_id)
+            if not job or run_id not in self.running:
+                raise ValueError('研究没有运行，批准请求已失效')
+            return job['engine'].permission_gate.resolve(request_id,decision)
+
     def snapshot(self):
         with storage.LOCK:
             return {"active_runs": list(self.jobs), "running_runs": [key for key in self.jobs if key in self.running],

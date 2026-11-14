@@ -49,6 +49,14 @@ ROLES = {
 
 DEFAULT_ORDER = ["planner", "experimenter", "verifier", "reporter"]
 
+for _role in ('planner','analyst','generalist','experimenter','verifier','reporter'):
+    ROLES[_role]['tools'] += ['list_files','read_file','select_model','read_subagents']
+for _role in ('experimenter','generalist'):
+    ROLES[_role]['tools'] += ['write_file','run_command','command_experiment']
+for _role in ('planner','analyst','generalist'):
+    ROLES[_role]['tools'] += ['delegate_research']
+ROLES['verifier']['tools'] += ['run_command']
+
 
 def get(role):
     if role not in ROLES:

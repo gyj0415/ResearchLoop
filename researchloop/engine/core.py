@@ -25,6 +25,8 @@ from researchloop import facts, memory, reliability, llmjson, reporting
 from researchloop.ollama import Budget, BudgetError
 from . import tools
 from . import protocol, routing, history
+from .permissions import PermissionGate
+from . import engineering, delegation
 
 EVIDENCE_TOOLS = {"inspect", "literature", "web_search", "web_fetch", "platform_search",
                   "read", "read_pdf", "read_docx", "read_pptx"}
@@ -55,6 +57,7 @@ ACTION_SCHEMA = {"type": "object", "properties": {
     "required": ["tool", "reason", "args"]}
 
 ARGUMENTS = {
+    **engineering.ARGUMENTS, **delegation.ARGUMENTS,
     "plan": ({"feasible": {"type": "boolean"}, **{k: {"type": "string"} for k in ("method", "limitations", "literature_query")},
               "research_kind": {"type": "string", "enum": ["quantitative", "simulation", "qualitative", "literature", "mixed"]}},
              ["feasible", "method", "limitations", "literature_query"]),
@@ -93,6 +96,15 @@ ARGUMENTS = {
     "read_pptx": ({"asset_id": {"type": "string"}, "max_chars": {"type": "integer"}}, ["asset_id"]),
     "read_pdf": ({"asset_id": {"type": "string"}, "max_chars": {"type": "integer"}}, ["asset_id"]),
 }
+ARGUMENTS['design_workflow'][0]['stages']['items']['properties'].update({
+    'role':{'type':'string','description':'角色名或自定义阶段名；自定义阶段按通用角色执行'},
+    'model_tier':{'type':'string','enum':['auto','light','strong']},
+    'parallel_group':{'type':'string'},
+    'tools':{'type':'array','items':{'type':'string'}}})
+SYSTEM += """\n工程研究可以使用 list_files/read_file/write_file/run_command，不受 NumPy worker 的接口限制。
+写入和命令必须遵守权限请求，等待用户批准，不得绕过。工作目录为本研究 workspace；命令没有操作系统沙箱隔离。
+工程定量实验使用 command_experiment，命令最后输出 JSON {"metrics":{"注册指标":实测值},"correctness_passed":true/false}，再用 verify 在冻结工作区重跑；不要用打印常数代替测量。
+可用 design_workflow 为阶段设置 model_tier=light/strong/auto；相邻同名 parallel_group 由独立子Agent并行。也可用 delegate_research 委派独立任务、read_subagents 读取内容、select_model 改变后续模型档位。子Agent不能递归委派，不能自行增加用户预算。"""
 
 
 def _memory_locked(function):
@@ -152,11 +164,13 @@ class ResearchEngine:
             self.budget.restore(run.get("budget") or {}, run.get("calls", [])[run.get("budget_call_start", 0):])
             run.pop("restore_budget", None)
         self.decide = decide or self.agent_step
+        self.permission_gate = PermissionGate(self)
         self.turn_id = ((run.get("turns") or [{}])[-1] or {}).get("id") or "t1"
 
     def save(self):
         run = self.run
         run["updated_at"], run["budget"] = storage.now(), self.budget.snapshot()
+        run['budget']['delegated_reserved_tokens'] = run.get('delegation_reserved',0)
         run["budget"]["tool_seconds"] = round(sum(s.get("elapsed_seconds", 0)
             for s in run["steps"][run.get("branch_step_start", 0):] if s.get("turn", "t1") == self.turn_id), 3)
         turn = next((item for item in run.get("turns", []) if item["id"] == self.turn_id), None)
@@ -224,6 +238,11 @@ class ResearchEngine:
         model, source = route["model"], route["model_source"]
         text = json.dumps(prompt, ensure_ascii=False) if isinstance(prompt, (dict, list)) else str(prompt)
         reserve = self.reserve_for(system, text)
+        if source!='cloud':
+            reserve=max(7644,reserve)  # Ollama context 6144 + at most 1500 generated tokens.
+        else:
+            # Cloud adds the schema to its prompt. UTF-8 bytes bound byte-tokenized input conservatively.
+            reserve=max(reserve,len((system+text+json.dumps(schema,ensure_ascii=False)).encode('utf-8'))+2012)
         self.last_reserve = reserve
         self.budget.reserve(reserve)
         node = history.begin(self, "model_call", model=model, source=source, route=route,
@@ -264,7 +283,7 @@ class ResearchEngine:
             reliability.record(self.run, failure, storage.settings(), self.turn_id)
             self.run["decision_feedback"] = {"model_error": str(error), "purpose": purpose}
             if source != "cloud" and "input_tokens" not in item:
-                item["unknown_reserved"] = 7644
+                item["unknown_reserved"] = reserve
             raise
         finally:
             item["wall_seconds"] = round(time.perf_counter() - started, 3)
@@ -366,7 +385,7 @@ class ResearchEngine:
             return raw[:limit]
 
         observations = [{"tool": step["tool"], "status": step["status"],
-                         "observation": compact(step.get("observation"), 500)}
+                         "observation": compact(step.get("observation"), 5000 if step['tool'] in ('read_file','read_subagents') else 4000 if step['tool']=='run_command' else 500)}
                         for step in run["steps"][-3:]]
         prompt = {"question": self.question_text(), "branch_note": run.get("branch_note"),
                   "branch_context": run.get("branch_context"), "decision_feedback": run.get("decision_feedback"),
@@ -392,6 +411,10 @@ class ResearchEngine:
                                  "feasible=false 或 gap_fill.required 表示当前证据不足，不是终点：先换来源继续取证，"
                                  "达到要求的尝试后才能重新 plan 或 finish；每次运行都要以报告结束。"
                                  "如果需要多阶段编排，先调用design_workflow并写明每个阶段的设计理由。"}
+        prompt['execution_context'] = {'workspace':str(self.folder/'workspace'), 'access_mode':run.get('access_mode','approval'),
+                                       'available_shells':[name for name,path in engineering.shells().items() if path],
+                                       'model_profiles':{name:conf for name,conf in (run.get('routing') or {}).get('profiles',{}).items() if conf.get('model')},
+                                       'subagents':run.get('subagents',[])[-6:]}
         correction = ""
         report_stage = "finish" in options and (options == ["finish"] or (run.get("active_agent") or {}).get("role") == "reporter")
         if report_stage:
@@ -504,6 +527,9 @@ class ResearchEngine:
                     names.append(item)
 
         add("get_memory_context")
+        add('list_files','read_file','write_file','run_command','select_model','read_subagents')
+        if not run.get('is_subagent'):
+            add('delegate_research')
         if not run.get("evidence_collected"):
             add("inspect")
         add("literature", "platform_search")
@@ -527,7 +553,7 @@ class ResearchEngine:
         else:
             add("hypothesis")
             if run.get("hypotheses"):
-                add("experiment")
+                add("experiment",'command_experiment')
             if any(e.get("status") == "completed" and not e.get("verification") for e in run.get("experiments", [])):
                 add("verify")
             if any(experiment.get("verification") for experiment in run.get("experiments", [])):
@@ -542,6 +568,8 @@ class ResearchEngine:
             names = [name for name in names if name in permitted]
             if not names:
                 names = ["plan"] if not run.get("plan") else ["finish"]
+        if run.get('is_subagent'):
+            names = [name for name in names if name not in ('delegate_research','design_workflow','remember_fact')]
         restrict = set(agent.get("tools") or []) if isinstance(agent, dict) and agent.get("tools") else None
         if restrict:
             names = [name for name in names if name in restrict]
@@ -675,7 +703,7 @@ class ResearchEngine:
 
     def _turn_steps(self):
         return [step for step in self.run["steps"][self.run.get("branch_step_start", 0):]
-                if step.get("turn", "t1") == self.turn_id]
+                if step.get("turn", "t1") == self.turn_id and step.get('status')!='paused']
 
     def _perform_tool(self, decision, retry=None):
         """Only retry read-only transient failures; settle each physical call."""
@@ -716,6 +744,9 @@ class ResearchEngine:
                 observation = self.apply(tool, args)
                 step.update(status="completed", observation=observation)
                 self.run.pop("recovery_feedback", None)
+            except history.Paused:
+                step.update(status='paused',observation={'message':'操作在等待批准时暂停，未执行；恢复后重新请求批准。'})
+                self.run['pending_decision']=decision
             except Exception as error:
                 info = reliability.classify(error, reliability.resource(tool, args, storage.settings()))
                 delay = info.get("retry_after", .25)
@@ -730,7 +761,7 @@ class ResearchEngine:
                     info["action"] = "defer"
                     info["message"] += " 当前预算或等待上限不允许立即重试。"
                 reliability.record(self.run, info, storage.settings(), self.turn_id)
-                step.update(status="failed", observation={"error": str(error), "recovery": info,
+                step.update(status="failed", observation={**getattr(error,'result',{}), "error": str(error), "recovery": info,
                             "instruction": info["message"] + "；只能使用真实证据，必要时明确未完成。"})
                 if can_retry:
                     next_retry = {"decision": decision, "attempt": attempt + 1, "retry_of": node["id"],
@@ -838,13 +869,17 @@ class ResearchEngine:
         return step
 
     def orchestrate(self):
-        def activate(identifier, role, goal, why="", label="", tools=None):
+        def activate(identifier, role, goal, why="", label="", tools=None, model_tier='auto'):
             agent = next((a for a in self.run["agents"] if a["id"] == identifier and a.get("turn") == self.turn_id), None)
             if agent is None:
                 model, source = self.resolve_model(role)
+                configured=routing.profile(self,model_tier)
+                if configured:
+                    model,source=configured['model'],configured.get('model_source','local')
                 agent = {"id": identifier, "role": role, "label": label or roles.ROLES[role]["label"],
                          "tools": tools, "goal": goal, "why": why, "status": "running",
                          "model": model, "model_source": source, "steps": [], "turn": self.turn_id}
+                agent['model_tier'] = model_tier
                 self.run["agents"].append(agent)
             self.run["active_agent"] = agent
             return agent
@@ -862,15 +897,40 @@ class ResearchEngine:
                 workflow_state = workflow_module.plan(self)
                 self.controller_step("design_workflow", {"reason": workflow_state.get("reason") or "规划器补齐工作流",
                     "stages": workflow_state["stages"]})
-        for index, stage in enumerate(self.run["workflow"]["stages"]):
+        stages=self.run['workflow']['stages']
+        consumed=set()
+        for index, stage in enumerate(stages):
+            if index in consumed:
+                continue
             self.guard_pause()
             if self.cancelled.is_set():
                 self.run["status"] = "cancelled"
                 break
             if self.run["status"] != "running":
                 break
+            group=stage.get('parallel_group')
+            if group:
+                peers=[]
+                for peer_index in range(index,len(stages)):
+                    if stages[peer_index].get('parallel_group')!=group:
+                        break
+                    peers.append((peer_index,stages[peer_index]))
+                if not 1<=len(peers)<=3:
+                    raise ValueError('一组并行子 Agent 最多 3 项')
+                group_agent=activate(f'group{index+1}','generalist','并行研究：'+group)
+                if group_agent['status'] in ('done','completed'):
+                    consumed.update(i for i,_ in peers)
+                    continue
+                tasks=[{'goal':s['goal'],'role':s['role'],'model_tier':s.get('model_tier','auto'),'max_steps':s.get('max_steps',3)} for _,s in peers]
+                self.controller_step('delegate_research',{'tasks':tasks,'batch_key':f'{self.turn_id}:{index}:{group}'})
+                self.guard_pause()
+                group_agent['status']='done'
+                if (self.run.get('pending_decision') or {}).get('tool')=='delegate_research':
+                    self.run.pop('pending_decision',None)
+                consumed.update(i for i,_ in peers)
+                continue
             agent = activate(f"g{index + 1}", stage["role"], stage["goal"], stage.get("why", ""),
-                             stage.get("label", ""), stage.get("tools"))
+                             stage.get("label", ""), stage.get("tools"), stage.get('model_tier','auto'))
             if agent["status"] in ("done", "completed"):
                 continue
             skip_reason = ""
@@ -1000,9 +1060,12 @@ class ResearchEngine:
             if item is None or item.get("verification"):
                 raise ValueError("需要一个尚未复核的成功实验ID")
             hypothesis = next(h for h in run["hypotheses"] if h["id"] == item["hypothesis_id"])
-            result = tools.experiment(item["code"], run, self.folder, item["id"], "verify", self.seconds_left(), secrets.randbelow(2**31))
+            command=item.get('kind')=='command'
+            result = engineering.verify_command(self,item,secrets.randbelow(2**31)) if command else tools.experiment(item["code"], run, self.folder, item["id"], "verify", self.seconds_left(), secrets.randbelow(2**31))
             item["verification"] = {"result": result, "check": tools.check(hypothesis, result),
-                                     "protocol": "同一冻结代码，新隐藏种子，预注册数值判据；不等于统计显著性或跨领域有效性"}
+                                     "protocol": "同一冻结工作区与命令，独立重跑并检查正确性；不等于统计显著性或隔离了所有外部环境" if command else "同一冻结代码，新隐藏种子，预注册数值判据；不等于统计显著性或跨领域有效性"}
+            if command and not result['correctness_passed']:
+                item['verification']['check']['passed']=False
             return {"id": item["id"], **item["verification"]}
         if tool == "finish":
             fill = run.get("gap_fill") or {}
@@ -1086,6 +1149,9 @@ def create(body):
     if not 8 <= len(question) <= 3000:
         raise ValueError("请写8至3000字符的研究问题")
     budget_enabled = bool(body.get("budget_enabled", True))
+    access_mode=body.get('access_mode','approval')
+    if access_mode not in ('approval','full'):
+        raise ValueError('access_mode 只能为 approval 或 full')
 
     def optional_int(value, label, default=None):
         if value in (None, ""):
@@ -1146,8 +1212,8 @@ def create(body):
         else:
             payload = str(asset.get("content", "")).encode()
             kind = "text"
-            if suffix not in (".txt", ".md", ".csv", ".json"):
-                raise ValueError("仅接受 TXT/MD/CSV/JSON 文本材料，或 PDF/DOCX/PPTX 文档")
+            if suffix not in ('.txt','.md','.csv','.json','.py','.js','.ts','.jsx','.tsx','.c','.cpp','.h','.rs','.go','.java','.toml','.yaml','.yml','.sh','.ps1','.bat','.sql','.html','.css'):
+                raise ValueError('仅接受文本/代码材料，或 PDF/DOCX/PPTX 文档')
             limit = 500000
         if len(payload) > limit:
             raise ValueError(f"{name} 超过 {limit // 1024}KB")
@@ -1155,7 +1221,15 @@ def create(body):
                          "sha256": hashlib.sha256(payload).hexdigest(), "payload": payload})
     (folder / "inputs").mkdir(parents=True)
     for asset in prepared:
-        (folder / "inputs" / asset["id"]).write_bytes(asset.pop("payload"))
+        payload=asset.pop('payload')
+        (folder / "inputs" / asset["id"]).write_bytes(payload)
+        if asset['kind']=='text':
+            work=folder/'workspace';work.mkdir(exist_ok=True)
+            destination=work/asset['name']
+            if destination.exists():
+                destination=work/(Path(asset['name']).stem+'-'+asset['id']+Path(asset['name']).suffix)
+            destination.write_bytes(payload)
+            asset['workspace_path']=destination.name
     state = memory_state()
     context = memory.recall(question) if body.get("use_memory", True) else {"facts": [], "method": None, "text": ""}
     experience = context.get("method")
@@ -1178,6 +1252,7 @@ def create(body):
            "memory_context": context, "memory_mode": "auto" if body.get("use_memory", True) else "disabled",
            "model_source": source, "provider": provider, "cloud_enabled": source == "cloud",
            "workflow_mode": mode, "roles": role_models, "routing": routing.clean(body.get("routing") or cfg.get("routing")), "workflow": None, "agents": [], "active_agent": None,
+           'access_mode':access_mode,'permission_grants':[],'approval_requests':[],
            "source_hash": storage.fingerprint(manifest)}
     storage.write_json(folder / "run.json", run)
     return ResearchEngine(run, folder)

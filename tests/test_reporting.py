@@ -1,5 +1,6 @@
 """Export fidelity and the final writing contract; no model or network research."""
 import copy
+import io
 import hashlib
 import json
 import tempfile
@@ -7,6 +8,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -143,6 +145,14 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
         self.assertEqual((self.engine.folder/'report.md').read_bytes(), original)
         self.assertEqual(hashlib.sha256((self.engine.folder/'run.json').read_bytes()).hexdigest(), run_hash)
+        package=self.engine.folder/'workspace/.packages';package.mkdir(parents=True,exist_ok=True)
+        (package/'large-dependency-fixture.txt').write_text('excluded dependency fixture')
+        (package.parent/'program.py').write_text('print(42)')
+        with urllib.request.urlopen(url.removesuffix('/report')+'/export') as response:
+            with zipfile.ZipFile(io.BytesIO(response.read())) as archive:
+                self.assertIn('workspace/program.py',archive.namelist())
+                self.assertIn('EXPORT-NOTES.txt',archive.namelist())
+                self.assertFalse(any('/.packages/' in name for name in archive.namelist()))
 
 
 if __name__ == '__main__':

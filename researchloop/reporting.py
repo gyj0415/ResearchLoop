@@ -103,7 +103,11 @@ def document(run):
     if budget.get("cloud_calls"):
         appendix.append(f"云端费用：{_number(budget.get('cloud_cost_usd'))} USD。" if budget.get("cloud_cost_known")
                         else "云端费用未完整计价；不能将未配置单价解释为零费用。")
-    if experiments:
+    if any(e.get('kind')=='command' for e in experiments):
+        appendix.append('工程实验：冻结工作区在 experiments/<id>/project；命令与参数见 run.json 对应 command_spec。'
+                        'explore/result.json 与 verify/result.json 保存实际输出。使用匹配工具链，在冻结目录的副本执行该命令；'
+                        '正确性检查由实验脚本实现，独立重跑不能消除外部服务或环境变化。')
+    if any(e.get('kind')!='command' for e in experiments):
         appendix.append("实验复现：在导出目录使用匹配的 Python/NumPy 环境，运行 "
                         "python source/researchloop/engine/worker.py experiments/<id>/explore/input.json。"
                         "复核使用冻结代码与独立种子；判据通过不等于统计显著性。")

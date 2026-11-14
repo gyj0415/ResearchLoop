@@ -72,7 +72,7 @@ function renderResearchEvidence(value){
 }
 renderData=function(){$('#research-tool-list').innerHTML=(state.research_tools||[]).map(t=>`<article class="panel memory-card"><h3>${esc(t.name)}</h3><p>${esc(t.description)}</p></article>`).join('');};
 let pendingFiles=[];
-const TEXT_SUFFIX=/\.(csv|txt|md|json)$/i, DOC_SUFFIX=/\.(pdf|docx|pptx)$/i;
+const TEXT_SUFFIX=/\.(csv|txt|md|json|py|js|ts|jsx|tsx|c|cpp|h|rs|go|java|toml|yaml|yml|sh|ps1|bat|sql|html|css)$/i, DOC_SUFFIX=/\.(pdf|docx|pptx)$/i;
 const MAX_TEXT_BYTES=500000, MAX_DOC_BYTES=20*1024*1024;
 function base64Bytes(buffer){const bytes=new Uint8Array(buffer);let binary='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk){binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));}return btoa(binary);}
 function renderAssetChips(){
@@ -97,7 +97,7 @@ async function startGeneralResearch(){
     const secondsRaw=$('#research-seconds').value.trim();
     const stepsRaw=$('#research-steps').value.trim();
     if(budgetOn&&(!tokensK||tokensK<=0))throw new Error('启用预算时请填写 token 预算（k）');
-    const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,roles:state.settings?.roles||{},budget_enabled:budgetOn,token_limit:budgetOn?Math.round(tokensK*1000):null,seconds_limit:budgetOn&&secondsRaw?Number(secondsRaw):null,max_steps:budgetOn&&stepsRaw?Number(stepsRaw):null});
+    const created=await api('/api/research',{question,assets,model:isCloud?pick.slice(6):pick,model_source:isCloud?'cloud':'local',workflow_mode:$('#research-workflow').value,access_mode:$('#research-access').value,roles:state.settings?.roles||{},budget_enabled:budgetOn,token_limit:budgetOn?Math.round(tokensK*1000):null,seconds_limit:budgetOn&&secondsRaw?Number(secondsRaw):null,max_steps:budgetOn&&stepsRaw?Number(stepsRaw):null});
     pendingFiles=[];renderAssetChips();
     await selectRun(created.id);toast('研究已启动；材料已随本次运行保存。');
   }catch(error){toast(error.message);}finally{researchSubmitting=false;button.disabled=false;}
@@ -169,7 +169,7 @@ function renderWorkflow(run){
   panel.classList.remove('hidden');
   const stages=run.workflow?.stages||[],turn=run.turns?.at(-1)?.id,agents=(run.agents||[]).filter(a=>!a.turn||!turn||a.turn===turn),calls=(run.calls||[]).filter(c=>!c.turn||!turn||c.turn===turn);
   const byAgent={};calls.forEach(c=>{if(c.agent)byAgent[c.agent]=(byAgent[c.agent]||0)+1;});
-  panel.innerHTML=`<div class="panel-header"><h2>本轮研究流程</h2><span class="workflow-source">${esc(run.workflow?.source==='agent_tool'?'Agent 设计':run.workflow?.source==='model'?'模型规划':run.workflow?.source==='model_retry'?'模型重试':'默认规划')} · ${stages.length} 阶段</span></div>${run.workflow?.reason?`<p class="workflow-reason">${esc(run.workflow.reason)}</p>`:''}<div class="workflow-stages">${stages.map((s,i)=>{const a=agents.filter(x=>x.id==='g'+(i+1)).at(-1)||{};return `<article class="workflow-stage${a.status==='running'?' active':''}"><div class="workflow-stage-heading"><span class="workflow-index">${String(i+1).padStart(2,'0')}</span><h3>${esc(s.label||roleLabel(s.role))}</h3><span class="workflow-stage-status">${esc(statuses[a.status]||'未开始')}</span></div><p>${esc(s.goal)}</p>${s.why?`<details class="stage-why"><summary>设计依据</summary><p>${esc(s.why)}</p></details>`:''}<small>${esc(a.model||'尚未调用模型')} · ${byAgent[a.id]||0} 次调用</small></article>`;}).join('')}</div>`;
+  panel.innerHTML=`<div class="panel-header"><h2>本轮研究流程</h2><span class="workflow-source">${esc(run.workflow?.source==='agent_tool'?'Agent 设计':run.workflow?.source==='model'?'模型规划':run.workflow?.source==='model_retry'?'模型重试':'默认规划')} · ${stages.length} 阶段</span></div>${run.workflow?.reason?`<p class="workflow-reason">${esc(run.workflow.reason)}</p>`:''}<div class="workflow-stages">${stages.map((s,i)=>{let a=agents.filter(x=>x.id==='g'+(i+1)).at(-1)||{};if(s.parallel_group){const child=(run.subagents||[]).find(c=>c.goal===s.goal&&c.turn===turn);if(child){const live=(run.subagent_live||[]).find(c=>c.subagent_id===child.id)||{};a={...child,status:live.status||child.status,model:(run.routing?.profiles||{})[s.model_tier]?.model||run.model};}}return `<article class="workflow-stage${a.status==='running'?' active':''}"><div class="workflow-stage-heading"><span class="workflow-index">${String(i+1).padStart(2,'0')}</span><h3>${esc(s.label||roleLabel(s.role))}</h3><span class="workflow-stage-status">${esc(statuses[a.status]||'未开始')}</span></div><p>${esc(s.goal)}</p>${s.why?`<details class="stage-why"><summary>设计依据</summary><p>${esc(s.why)}</p></details>`:''}<small>${s.parallel_group?'并行 · '+esc(s.parallel_group)+' · ':''}${esc(({light:'轻量',strong:'高能力',auto:'默认'}[s.model_tier]||'默认'))} · ${esc(a.model||'待执行')}</small></article>`;}).join('')}</div>`;
 }
 function invocationRecords(value){
   if(value.trace?.length)return value.trace;
@@ -188,11 +188,15 @@ function renderChain(run){
   if($('#chain-turn').innerHTML!==options){$('#chain-turn').innerHTML=options;$('#chain-turn').value=chainView.turn;}
   const scoped=records.filter(s=>chainView.turn==='all'||s.turn===chainView.turn);
   const filtered=scoped.filter(s=>(chainView.status==='all'||s.status===chainView.status)&&(!chainView.kind||chainView.kind==='all'||s.kind===chainView.kind)&&(!chainView.query||JSON.stringify(s).toLowerCase().includes(chainView.query.toLowerCase())));
-  $('#chain-meta').textContent=`${scoped.length} 条调用 · ${scoped.filter(s=>s.kind==='model_call').length} 次模型请求 · ${scoped.filter(s=>s.kind==='tool_call').length} 次工具执行`;
+  const children=(run.subagents||[]).filter(c=>chainView.turn==='all'||c.turn===chainView.turn);
+  const liveCalls=children.reduce((sum,child)=>sum+Math.max(0,((run.subagent_live||[]).find(c=>c.subagent_id===child.id)?.budget?.model_calls||0)-(child.accounted_calls||0)),0);
+  const modelCalls=(run.calls||[]).filter(c=>chainView.turn==='all'||c.turn===chainView.turn).length+liveCalls;
+  $('#chain-meta').textContent=children.length?`${scoped.length} 条主链记录 · ${modelCalls} 次模型请求 · ${children.length} 个子 Agent`:`${scoped.length} 条调用 · ${modelCalls} 次模型请求 · ${scoped.filter(s=>s.kind==='tool_call').length} 次工具执行`;
   $('#chain-usage-note').textContent=run.trace?.length?'每次请求独立计量；工具执行单独标记。展开记录可查看输入输出或从此处创建分支。':'历史记录未保存调用顺序与状态快照；模型请求单独列出，分支会基于所选记录重新规划。';
-  const stamp=JSON.stringify([run.id,chainView,filtered]);if(box._chainStamp===stamp)return;
+  const stamp=JSON.stringify([run.id,chainView,filtered,run.subagent_live]);if(box._chainStamp===stamp)return;
   const open=new Set($$('details.chain-step[open]').map(el=>el.dataset.stepKey));box._chainStamp=stamp;
   box.innerHTML=filtered.length?filtered.map((s,index)=>{
+    if(s.kind==='subagent'&&typeof renderSubagentNode==='function')return renderSubagentNode(run,s,index,open);
     const key=`${s.turn||'legacy'}:${s.id}`,failed=s.status==='failed',model=s.kind==='model_call',seconds=s.elapsed_seconds;
     const title=model?(s.model||'模型请求'):(TOOL_LABELS[s.tool]||s.tool||'决策校验');
     const source=s.source==='cloud'?'云端':s.source==='controller'?'控制器':'本地';
@@ -204,6 +208,7 @@ function renderChain(run){
   }).join(''):empty('暂无匹配的调用','开始研究或调整筛选条件。');
   $$('[data-chain-raw]').forEach(button=>button.onclick=()=>showDetail('调用记录',records.find(s=>s.id===button.dataset.chainRaw)));
   $$('[data-fork-node]').forEach(button=>button.onclick=()=>openFork(records.find(s=>s.id===button.dataset.forkNode)));
+  if(typeof bindAgentChain==='function')bindAgentChain(run,records);
 }
 function renderBudgetResearch(){
   if(!run||run.domain!=='research')return;

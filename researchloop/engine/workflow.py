@@ -20,6 +20,8 @@ SCHEMA = {
                            "goal": {"type": "string"},
                            "why": {"type": "string"},
                            "max_steps": {"type": "integer"},
+                           "model_tier": {"type":"string","enum":["auto","light","strong"]},
+                           "parallel_group": {"type":"string","description":"相邻且同名的 1–3 阶段交给独立子 Agent 并行；后续阶段汇总结果。报告阶段保持串行。"},
                            "tools": {"type": "array", "items": {"type": "string"},
                                      "description": "可选：只允许该阶段使用的工具子集"}},
             "required": ["role", "goal", "why"]}},
@@ -87,6 +89,19 @@ def validate(stages):
                         "goal": goal, "max_steps": max(1, min(MAX_STAGE_STEPS, steps)),
                         "tools": selected,
                         "why": str(stage.get("why") or "").strip()[:400]})
+        tier=stage.get('model_tier','auto')
+        group=str(stage.get('parallel_group') or '').strip()
+        if tier not in ('auto','light','strong') or len(group)>60:
+            raise ValueError('模型档位或并行组无效')
+        if group and (role=='reporter' or selected):
+            raise ValueError('报告阶段及自定义工具子集阶段暂不支持并行组，请保持串行')
+        cleaned[-1].update(model_tier=tier,parallel_group=group)
+    for index,stage in enumerate(cleaned):
+        group=stage['parallel_group']
+        if group and sum(s['parallel_group']==group for s in cleaned)>3:
+            raise ValueError('每组最多 3 个并行子 Agent')
+        if group and any(s['parallel_group']==group for s in cleaned[:index]) and cleaned[index-1]['parallel_group']!=group:
+            raise ValueError('同一并行组的阶段必须相邻')
     return cleaned
 
 
@@ -95,6 +110,9 @@ def design(engine, args):
     """The design_workflow tool: the agent proposes stages and must justify them."""
     raw = args.get("stages")
     stages = validate(raw)
+    from . import routing
+    for stage in stages:
+        routing.profile(engine,stage['model_tier'])
     reason = str(args.get("reason") or "").strip()
     if not reason:
         raise ValueError("design_workflow 需要整体设计理由 reason")
@@ -114,10 +132,13 @@ def plan(engine):
     run = engine.run
     prompt = {"question": engine.question_text(), "assets": run["assets"], "budget": engine.budget.snapshot(),
               "roles": roles.describe(),
+              "model_profiles": (run.get('routing') or {}).get('profiles',{}),
               "instruction": "只输出stages数组：阶段数量与划分由这个问题本身决定（1–8个），不要套用固定的四阶段模板。"
                              "每个阶段给出role、goal、max_steps；可以为阶段取自定义名称（role填自定义名，会作为通用阶段执行），"
                              "也可以用 tools 限定该阶段只使用哪些工具。定性/文献问题可以没有实验；需要数值实验时应有experimenter，复核与报告在实验之后。"
-                             "每个阶段必须写 why：为什么需要、解决什么、为什么这个顺序。阶段目标不能预设未核实的结论；不要编造材料中没有的数据。"}
+                             "每个阶段必须写 why：为什么需要、解决什么、为什么这个顺序。可用 model_tier 选择已配置的 light/strong，auto 沿用默认路由。"
+                             "独立取证/分析任务可放进相邻同名 parallel_group（每组最多3个），实际由独立子Agent并行；有依赖的实验/复核及最终汇总放在之后。"
+                             "阶段目标不能预设未核实的结论；不要编造材料中没有的数据。"}
     attempts = []
     stages = None
     source = "default"

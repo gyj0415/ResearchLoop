@@ -85,7 +85,7 @@ async function refreshOnce(force=false) {
     }
     if (!selectedId) run = null;
     renderTop(); renderMetrics(); renderMemory(); renderData();
-      const stamp = run ? JSON.stringify([run.id,run.updated_at,run.status,run.finished_at,run.report,run.turns]) : 'empty';
+      const stamp = run ? JSON.stringify([run.id,run.updated_at,run.status,run.finished_at,run.report,run.turns,run.subagent_live]) : 'empty';
     if (force || stamp !== lastRunStamp) { lastRunStamp = stamp; renderRun(); }
     renderBudget();
   } catch(error) { $('#notice').textContent = `本地服务连接异常：${error.message}`; $('#notice').classList.remove('hidden'); }
@@ -195,7 +195,7 @@ function renderSidebarSessions(){
   let group='';
   const content=runs.length?runs.map(r=>{
     const date=sidebarSessionDate(r.created_at),active=r.id===selectedId&&page==='session';
-    const title=String(r.question||r.task||'未命名研究').trim(),status=labels[r.status]||'状态未知';
+    const title=String(r.question||r.task||'未命名研究').trim(),status=r.pending_approval_count?`待批准 ${r.pending_approval_count} 项`:(labels[r.status]||'状态未知');
     const heading=group!==date.group?`<div class="session-group" role="presentation">${esc(date.group)}</div>`:'';group=date.group;
     return `${heading}<div class="session-row${active?' active':''}" role="listitem"><button type="button" class="session-link${active?' active':''}" data-session="${esc(r.id)}" ${active?'aria-current="page"':''} title="${esc(title)}" aria-label="${esc(title)}，${esc(status)}"><span class="session-name">${esc(title)}</span><span class="session-meta"><span class="session-state"><span class="session-dot ${esc(r.status)}" aria-hidden="true"></span>${esc(status)}</span><time datetime="${esc(r.created_at||'')}" title="${esc(date.full)}">${esc(date.label)}</time></span></button><button type="button" class="session-archive" data-archive="${esc(r.id)}" title="归档会话" aria-label="归档：${esc(title)}">${icon('archive')}</button></div>`;
   }).join(''):`<div class="session-empty"><span class="session-empty-icon">${icon('layers')}</span><strong>还没有研究记录</strong><span>从一个问题开始新的研究</span></div>`;

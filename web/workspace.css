@@ -76,6 +76,18 @@ footer a{color:var(--muted)}
 .paper-preview section{margin:20px 0}
 .paper-preview h3{font-size:14px;margin:0 0 9px}
 .paper-preview p{font-size:13px;line-height:1.95;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+.access-note{padding:0 4px;font-size:11px;line-height:1.7;margin:12px 0 0}
+.approval-card{background:#fff9ed;border:1px solid #e5cf9f;border-radius:12px;padding:18px;margin:0 0 18px}
+.approval-heading{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:13px}
+.approval-heading>span{font-size:11px;color:var(--muted)}
+.approval-path{font-size:11px;color:var(--muted);overflow-wrap:anywhere;line-height:1.7;margin:10px 0}
+.approval-card pre{max-height:260px;overflow:auto;font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.approval-actions{display:flex;gap:10px;flex-wrap:wrap}
+.chain-subagent{border-color:#c6c0ee}
+.child-call{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px;min-width:0}
+.child-call>summary{display:flex;gap:12px;align-items:center;flex-wrap:wrap;cursor:pointer;font-size:11px}
+.child-call>summary>strong{font-size:12px;overflow-wrap:anywhere;flex:1;min-width:0}
+.child-call .chain-io{margin-top:14px}
 .session-turn-history{border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 16px}
 .session-turn-history>summary{padding:13px 0;font-size:11px;color:var(--muted);cursor:pointer}
 .session-turn-history>.turn-block{margin:0 0 14px}

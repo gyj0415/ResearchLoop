@@ -1,6 +1,7 @@
 """Invocation settlements and immutable checkpoints for pause/resume/fork."""
 import copy
 import hashlib
+import os
 import shutil
 import time
 import uuid
@@ -27,6 +28,19 @@ def append(engine, item):
         file.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+def _files(base,ignored):
+    for directory,dirs,names in os.walk(base,followlinks=False):
+        for name in dirs[:]:
+            path=Path(directory)/name
+            if name in ignored or path.is_symlink():
+                dirs.remove(name)
+                if path.is_symlink() and name not in ignored:
+                    yield path
+        for name in names:
+            if name not in ignored:
+                yield Path(directory)/name
+
+
 def settle(engine, node, **fields):
     node.update(ended_at=storage.now(), **copy.deepcopy(fields))
     engine.save()
@@ -34,9 +48,21 @@ def settle(engine, node, **fields):
     state = copy.deepcopy(engine.run)
     # Only copy files which existed at this boundary, never future artifacts.
     artifacts = []
-    for base in ("inputs", "source", "experiments", "documents", "evidence"):
-        for file in (engine.folder / base).rglob("*"):
+    excluded=[]
+    size=0
+    ignored={'.git','.venv','node_modules','.cache','.tmp','.packages','__pycache__','checkpoint-files','checkpoints'}
+    for base in ("inputs", "source", "experiments", "documents", "evidence",'workspace','subagents'):
+        for file in _files(engine.folder/base,ignored):
+            relative=file.relative_to(engine.folder)
+            if file.is_symlink():
+                excluded.append(relative.as_posix())
+                continue
             if file.is_file():
+                length=file.stat().st_size
+                if length>20*1024*1024 or size+length>100*1024*1024:
+                    excluded.append(relative.as_posix())
+                    continue
+                size+=length
                 payload = file.read_bytes()
                 digest = hashlib.sha256(payload).hexdigest()
                 blob = engine.folder / "checkpoint-files" / digest
@@ -45,7 +71,7 @@ def settle(engine, node, **fields):
                     blob.write_bytes(payload)
                 artifacts.append({"path": file.relative_to(engine.folder).as_posix(), "sha256": digest})
     storage.write_json(engine.folder / "checkpoints" / (node["checkpoint"] + ".json"),
-                       {"version": 1, "node": node["id"], "state": state, "artifacts": artifacts})
+                       {"version": 1, "node": node["id"], "state": state, "artifacts": artifacts,'excluded_files':excluded})
     engine.save()
     append(engine, {"event": "settled", "node": node})
 
@@ -54,13 +80,29 @@ def fork(run, folder, node_id, question=""):
     """Copy a frozen prefix. Legacy records explicitly inherit no later evidence."""
     folder = Path(folder)
     node = next((item for item in run.get("trace", []) if item["id"] == node_id), None)
-    if node:
+    if node_id=='__initial__':
+        first=next((entry for entry in run.get('trace',[]) if entry.get('checkpoint')),None)
+        saved=storage.read_json(folder/'checkpoints'/(first['checkpoint']+'.json')) if first else None
+        if not saved:
+            raise ValueError('缺少初始输入的冻结快照，无法精确回退')
+        state=copy.deepcopy(saved['state'])
+        artifacts=[a for a in saved['artifacts'] if Path(a['path']).parts[0] in ('inputs','source')]
+        state.update(sources=[],hypotheses=[],experiments=[],documents=[],steps=[],calls=[],events=[],trace=[],
+                     agents=[],active_agent=None,workflow=None,plan=None,reflections=[],evidence_collected=False,
+                     subagents=[],delegation_batches=[],approval_requests=[],permission_grants=[])
+        for key in ('report','pending_response','pending_decision','pending_tool_retry','gap_fill','decision_feedback','recovery_feedback'):
+            state.pop(key,None)
+        state['turns']=[{'id':'t1','question':state.get('current_question') or state['question'],'status':'paused','at':storage.now()}]
+        precision='initial_inputs'
+    elif node:
         checkpoint = node.get("checkpoint", "")
         if not checkpoint.startswith("cp-n") or not checkpoint.replace("-", "").isalnum():
             raise ValueError("该调用尚未完成，没有可用检查点")
         saved = storage.read_json(folder / "checkpoints" / (checkpoint + ".json"))
         if not saved:
             raise ValueError("检查点文件不存在，不能精确分支")
+        if saved.get('excluded_files'):
+            raise ValueError('该检查点有超出冻结限额的文件，不能声称精确恢复；请从更早检查点或初始输入重新开始')
         state, artifacts = saved["state"], saved["artifacts"]
         precision = "checkpoint"
     else:
@@ -109,10 +151,17 @@ def fork(run, folder, node_id, question=""):
             dest = target / relative
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, dest)
+        if precision=='initial_inputs':
+            for asset in state.get('assets',[]):
+                if asset.get('kind')=='text':
+                    name=Path(asset.get('workspace_path') or asset['name']).name
+                    workspace=target/'workspace';workspace.mkdir(exist_ok=True)
+                    shutil.copyfile(target/'inputs'/asset['id'],workspace/name)
         state["lineage"] = {"run_id": run["id"], "node_id": node_id, "precision": precision,
                             "inherited_budget": state.get("budget"), "at": storage.now()}
         state.update(id=identifier, session_id=identifier, created_at=storage.now(), updated_at=storage.now(),
                      status="paused", finished_at=None, archived=False, stop_reason=None, error=None)
+        state.update(access_mode='approval',permission_grants=[],approval_requests=[])
         # Carry prefix checkpoints as well so inherited records remain forkable.
         for entry in state.get("trace", []):
             frozen = entry.get("checkpoint", "")
@@ -153,6 +202,22 @@ def fork(run, folder, node_id, question=""):
         # Retain the directory for diagnosis; it is not a valid session without run.json.
         raise
     return state, target
+
+
+def retry(run,folder,node_id):
+    records=run.get('trace') or []
+    index=next((i for i,node in enumerate(records) if node['id']==node_id),None)
+    if index is None or records[index].get('status')=='running':
+        raise ValueError('请选择已经结束的调用重试')
+    previous=next((node for node in reversed(records[:index]) if node.get('checkpoint')),None)
+    selected=previous['id'] if previous else '__initial__'
+    error=(records[index].get('output') or {}).get('error','')
+    state,target=fork(run,folder,selected,
+        '从目标调用之前重新研究。原调用：'+str(records[index].get('tool') or records[index].get('purpose') or records[index]['kind'])+
+        '；原反馈：'+str(error)[:1000]+'。根据真实反馈选择修正或重试，不重复已成功的实验。')
+    state['lineage'].update(action='retry_before',retry_of=node_id)
+    storage.write_json(target/'run.json',state)
+    return state,target
 
 
 def saved_terminal(state):
