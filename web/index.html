@@ -19,6 +19,7 @@
     <button class="nav-item" data-page="records"><span data-icon="layers"></span>实验记录<span class="nav-count" id="run-count">0</span></button>
     <button class="nav-item" data-page="memory"><span data-icon="spark"></span>研究经验<span class="nav-count" id="memory-count">0</span></button>
     <button class="nav-item" data-page="data"><span data-icon="database"></span>数据与评估</button>
+    <button class="nav-item" data-page="logs"><span data-icon="clock"></span>日志<span class="nav-count" id="log-count">0</span></button>
   </nav>
   <div class="sidebar-note"><div class="note-orbit"><span>↻</span></div><strong>从证据出发，<br>让经验回来。</strong><p>假设可以被否决。<br>进化应当可验证。</p></div>
   <div class="sidebar-bottom"><span class="small-dot"></span><div>LOCAL FIRST<small>本地推理 · 云端关闭</small></div><button id="settings-shortcut" class="icon-button" aria-label="模型设置"><span data-icon="settings"></span></button></div>
@@ -29,6 +30,28 @@
     <section id="page-workspace" class="page">
       <div class="page-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>BOHACK 2026 · AI RESEARCH</div><h1>让下一次研究，少走弯路<span class="heading-dot">。</span></h1><p class="subtitle">提出假设，交给实验。把这一轮的证据，变成下一轮的经验。</p></div><button class="primary-button new-run"><span data-icon="plus"></span>开始研究</button></div>
       <div id="notice" class="notice hidden" role="status"></div>
+      <section id="composer" class="panel composer" aria-label="研究方向">
+        <div class="panel-header"><div><div class="section-label">RESEARCH DIRECTION</div><h2>先说想研究什么</h2></div><button type="button" class="small-link" id="open-retrieval">已有检索任务</button></div>
+        <div id="brief-thread" class="brief-thread"></div>
+        <div class="composer-box">
+          <textarea id="brief-input" rows="3" placeholder="例如：偏置加完再对时间维取均值，看有没有一种正确且更快的写法。也可以先贴上自己的 reference。"></textarea>
+          <div class="composer-actions">
+            <button type="button" class="chip" data-prompt="偏置加完再取均值，看能不能比 eager 快">可消元的均值</button>
+            <button type="button" class="chip" data-prompt="GELU 之后再取均值，先判断值不值得做">含激活的归约</button>
+            <button type="button" class="chip" data-prompt="我想改进 SciFact 上的证据检索">证据检索</button>
+            <button type="button" class="secondary-button" id="draft-brief">拟定计划</button>
+          </div>
+        </div>
+        <details class="task-adder">
+          <summary>加入我的算子</summary>
+          <label>任务名<input id="task-name" value="my_op" autocomplete="off"></label>
+          <label>shape，用分号隔开<input id="task-shapes" value="4,64,32; 1,31,16" autocomplete="off"></label>
+          <label>reference(inputs)<textarea id="task-source" rows="5">def reference(inputs):
+    return (inputs["x"] + inputs["bias"]).mean(dim=1)</textarea></label>
+          <button type="button" class="secondary-button" id="add-task">读懂并加入</button>
+        </details>
+        <div id="plan-card" class="plan-card hidden"></div>
+      </section>
       <div class="metric-grid" id="metrics"></div>
       <div class="dataset-strip"><div class="dataset-icon" data-icon="database"></div><div><strong>SciFact <span>科学主张证据库</span></strong><p id="dataset-summary">正在检查本地数据…</p></div><div class="dataset-strip-right"><span class="pill subtle">句子级证据</span><span class="pill" id="test-seal">最终测试已封存</span><button class="small-link" data-goto="data">查看数据 <span>↗</span></button></div></div>
       <section id="diagnostics-panel" class="panel diagnostics-panel hidden" aria-label="失败诊断和研究决策依据"></section>
@@ -45,6 +68,7 @@
     <section id="page-records" class="page hidden"><div class="page-heading"><div><div class="eyebrow">EXPERIMENT ARCHIVE</div><h1>每一次尝试，都有据可查。</h1><p class="subtitle">真实测量、完整成本，以及被否决的假设。选择一条运行查看原始证据。</p></div><button class="primary-button new-run"><span data-icon="plus"></span>开始研究</button></div><div class="protocol-callout"><span data-icon="compare"></span><div><strong>如何做经验迁移对照</strong><p>先在 A 运行 Agent 并发布经验，再在 B 分别运行无经验 Agent、带经验 Agent、配置沿用与随机搜索。保持相同种子、模型和预算。不同任务的分数不能直接相减。</p></div></div><section class="panel"><div class="panel-header"><h2>运行档案</h2><span class="pill subtle">跨运行不复用结果缓存</span></div><div id="records"></div></section></section>
     <section id="page-memory" class="page hidden"><div class="page-heading"><div><div class="eyebrow">LEARN · VERIFY · ROLLBACK</div><h1>留下经验，也留下退路。</h1><p class="subtitle">经验是待检验的研究先验。只有通过独立验收的 Agent 运行，才能发布新版本。</p></div><span class="outline-badge" id="active-memory">当前版本 v0</span></div><div class="memory-intro"><div class="memory-intro-mark">↻</div><div><h2>学到的是研究策略。</h2><p>下一次规划会获得经验的适用条件、实验依据与局限，不会继承查询答案或结果缓存。回退保留全部历史记录。</p></div></div><div id="memory-list"></div></section>
     <section id="page-data" class="page hidden"><div class="page-heading"><div><div class="eyebrow">DATA & EVALUATION</div><h1>把验证放在优化之外。</h1><p class="subtitle">固定证据单元、按文档隔离任务，最终测试在方案冻结后统一开放。</p></div><button id="prepare-button" class="secondary-button"><span data-icon="download"></span>准备公开数据</button></div><div id="data-content"></div><section class="panel final-panel"><div class="panel-header"><div><div class="section-label">ONE-TIME ACCEPTANCE</div><h2>最终测试</h2></div><button id="finalize-button" class="secondary-button">冻结并统一验收</button></div><p class="body-muted">此操作会冻结当前代码版本的所有已完成运行，并统一评估保留测试集。结果开放后，不再作为可反复调参的保留集。实验运行不会读取这部分反馈。</p><div id="final-results"></div></section></section>
+    <section id="page-logs" class="page hidden"><div class="page-heading"><div><div class="eyebrow">ACTIVITY LOG</div><h1>任务进行时的记录。</h1><p class="subtitle">拟定计划、加入算子、检索运行和算子实验都会写在这里。</p></div></div><section class="panel log-panel"><div id="log-view"></div></section></section>
     <footer><span>ResearchLoop <span class="footer-divider">/</span> 可追溯 · 可复现 · 可回退</span><span>日新 RENEW <span class="footer-divider">·</span> Built for better research.</span></footer>
   </main>
 </div>

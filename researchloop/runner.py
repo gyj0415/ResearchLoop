@@ -11,6 +11,7 @@ from .diagnostics import diagnose, query_profile, screen_accepts, select_memory
 from .ollama import Budget, BudgetError, Ollama, probe
 from .policy import BASELINE, CONFIG_SCHEMA, FEATURES, config_changes, gate_matches, normalize_config, signature
 from .retrieval import Retriever, evaluate, guard_accepts, subset_result
+from . import activity
 from .storage import ROOT, RUNS, LOCK, get_memory, grounded_memory, list_runs, now, read_json, run_path, settings, source_hash, write_json
 
 DECISION_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {
@@ -142,6 +143,7 @@ class ResearchService:
             run["events"].append(item)
             with (RUNS / run["id"] / "events.jsonl").open("a", encoding="utf-8") as output:
                 output.write(json.dumps(item, ensure_ascii=False) + "\n")
+            activity.record(kind, text, run_id=run["id"], task=run.get("task", ""), source="retrieval")
             save()
         def on_call(item):
             run["calls"].append(item)

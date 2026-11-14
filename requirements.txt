@@ -1,1 +1,4 @@
-# Python 3.12+ standard library only. No runtime packages to install.
+# Retrieval loop: Python 3.12+ standard library only.
+# Operator scenario (researchloop/scenarios/operator and src/gates.py): numpy, torch.
+numpy
+torch

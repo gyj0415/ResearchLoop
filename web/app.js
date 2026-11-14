@@ -32,7 +32,8 @@ const percent = n => n == null ? '—' : `${(n*100).toFixed(1)}%`;
 const number = n => new Intl.NumberFormat('en-US').format(n || 0);
 const time = n => n >= 60 ? `${Math.floor(n/60)}m ${Math.round(n%60)}s` : `${Math.round(n || 0)}s`;
 const delta = n => `${n >= 0 ? '+' : ''}${(n*100).toFixed(1)} pp`;
-const modeLabel = r => r.mode === 'search' ? '随机搜索对照' : r.mode === 'carry' ? '配置沿用对照' : r.memory_version ? `Agent · 经验 v${r.memory_version}` : r.memory_selection?.requested_version ? `Agent · 拒绝经验 v${r.memory_selection.requested_version}` : 'Agent · 无历史经验';
+const operatorTask = name => name === 'win_bias_mean' || name === 'lose_gelu_pool';
+const modeLabel = r => r.mode === 'operator' ? '算子研究' : r.mode === 'search' ? '随机搜索对照' : r.mode === 'carry' ? '配置沿用对照' : r.memory_version ? `Agent · 经验 v${r.memory_version}` : r.memory_selection?.requested_version ? `Agent · 拒绝经验 v${r.memory_selection.requested_version}` : 'Agent · 无历史经验';
 
 async function api(path, body) {
   const response = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -47,12 +48,13 @@ function toast(message) {
 }
 function empty(title, message, mark='↻') { return `<div class="empty-state"><div class="empty-mark">${mark}</div><strong>${esc(title)}</strong><p>${esc(message)}</p></div>`; }
 function goto(name) {
-  page = ['workspace','records','memory','data'].includes(name) ? name : 'workspace';
+  page = ['workspace','records','memory','data','logs'].includes(name) ? name : 'workspace';
   $$('.page').forEach(el => el.classList.toggle('hidden',el.id !== `page-${page}`));
   $$('.nav-item').forEach(el => el.classList.toggle('active',el.dataset.page === page));
-  $('#page-label').textContent = {workspace:'研究工作台',records:'实验记录',memory:'研究经验',data:'数据与评估'}[page];
+  $('#page-label').textContent = {workspace:'研究工作台',records:'实验记录',memory:'研究经验',data:'数据与评估',logs:'日志'}[page];
   history.replaceState(null,'',`#${page}`);
   if (page === 'data') renderFinal();
+  if (page === 'logs') renderLogs();
 }
 $$('[data-page]').forEach(el => el.addEventListener('click',() => goto(el.dataset.page)));
 $$('[data-goto]').forEach(el => el.addEventListener('click',() => goto(el.dataset.goto)));
@@ -76,6 +78,7 @@ async function refresh(force=false) {
     }
     if (!selectedId) run = null;
     renderTop(); renderMetrics(); renderRecords(); renderMemory(); renderData();
+    if (page === 'logs') renderLogs();
     const stamp = run ? `${run.id}:${run.updated_at}` : 'empty';
     if (force || stamp !== lastRunStamp) { lastRunStamp = stamp; renderRun(); }
     renderBudget();
@@ -88,7 +91,7 @@ function renderTop() {
   $('#active-memory').textContent = `当前版本 v${state.memory.active}`;
   $('#dataset-summary').textContent = state.dataset ? `${number(state.dataset.corpus_count)} 篇摘要 · ${state.research_tasks?.C?'C / D 各 24 道探索 + 12 道验收 · 8 道固定开发筛选':'A / B 为已见开发任务'} · 文档隔离` : '数据尚未准备，前往「数据与评估」下载官方公开数据。';
   const taskInput=$('#run-form [name=task]');
-  if(taskInput.dataset.version!=='2'){taskInput.innerHTML='<option value="C">C · 第二版来源任务（24+12）</option><option value="D">D · 第二版迁移任务（24+12）</option><option value="A">A · 已见开发任务（40+20）</option><option value="B">B · 已见开发任务（40+20）</option>';taskInput.dataset.version='2';}
+  if(taskInput.dataset.version!=='3'){taskInput.innerHTML='<option value="win_bias_mean">算子 · 可赢：偏置加后取均值</option><option value="lose_gelu_pool">算子 · 注定输：GELU 后取均值</option><option value="C">C · 第二版来源任务（24+12）</option><option value="D">D · 第二版迁移任务（24+12）</option><option value="A">A · 已见开发任务（40+20）</option><option value="B">B · 已见开发任务（40+20）</option>';taskInput.dataset.version='3';}
   $('#test-seal').textContent = state.final_test_revealed ? '最终测试已开放' : '最终测试已封存';
   let notice = '';
   if (state.preparing) notice = state.preparing.message;
@@ -96,12 +99,20 @@ function renderTop() {
   else if (run?.error) notice = run.error;
   else if (run && ['budget_stopped','cancelled','interrupted'].includes(run.status)) notice = run.stop_reason;
   $('#notice').classList.toggle('hidden',!notice); $('#notice').textContent = notice;
-  $$('.new-run').forEach(el => el.disabled = !!state.active_run || !!state.preparing || !state.dataset);
+  $$('.new-run').forEach(el => el.disabled = !!state.active_run || !!state.preparing);
 }
 function metric(label,value,unit,bottom,which='target',extra='') {
   return `<article class="metric-card"><div class="metric-top"><span>${label}</span><span class="metric-icon">${icon(which)}</span></div><div class="metric-value">${value}<small>${unit}</small></div><div class="metric-bottom">${extra}${bottom}</div></article>`;
 }
 function renderMetrics() {
+  if (run?.domain === 'operator') {
+    const speed = run.operator_experiments?.length ? `${Number(run.verdict?.best_speedup || 0).toFixed(2)}×` : '—';
+    $('#metrics').innerHTML = metric('同窗加速比', speed, '', run.verdict?.reason_code || run.skip_reason || '等待裁决', 'target') +
+      metric('本轮模型 token', '0', '', '算子研究不调用模型', 'coin') +
+      metric('已完成候选实验', String(run.operator_experiments?.length || 0), run ? ` / ${run.max_experiments}` : '', '研究层决定是否做实验', 'flask') +
+      metric('当前经验版本', `v${state.memory.active}`, '', `${state.memory.versions.length} 个历史版本 · 支持回退`, 'spark');
+    return;
+  }
   const budget=run?.budget;
   const guard=run?.guard;
   const best=guard ? (guard.accepted ? guard.candidate.metrics : guard.baseline.metrics) : run?.experiments.filter(e=>e.result_scope!=='screen').reduce((b,e)=>Math.max(b,e.result.metrics.complete_at_5),0);
@@ -126,6 +137,7 @@ function renderRun() {
     $('#evidence').innerHTML=empty('证据会出现在这里','每个实验保留逐题结果、原始句子与标注证据。','⌕');
     return;
   }
+  if (run.domain === 'operator') { renderOperatorRun(); return; }
   const active=['running','queued'].includes(run.status);
   $('#run-meta').innerHTML=`<span class="status-dot ${active?'running':run.status==='failed'?'failed':''}"></span><span>${esc(statuses[run.status])}</span><span>·</span><span>${esc(modeLabel(run))}</span><span>·</span><span>任务 ${esc(run.task)}</span><span>· seed ${run.seed}</span><span class="spacer"></span>${active?'<button id="stop-run">停止</button>':''}<button id="show-calls">原始调用</button><a href="/api/runs/${esc(run.id)}/export">导出结果 ↗</a>${run.memory_candidate?'<button id="publish-memory">发布经验</button>':''}`;
   $('#stop-run')?.addEventListener('click',async()=>{try{await api(`/api/runs/${run.id}/cancel`,{});toast('已请求停止，当前模型或工具调用结束后生效。');}catch(e){toast(e.message);}});
@@ -142,6 +154,27 @@ function renderRun() {
   if(active && lastEvent?.type==='planning')$('#hypothesis').insertAdjacentHTML('beforeend','<div class="hypothesis-source"><span class="loader"></span> 正在等待本地模型…</div>');
   renderEvidenceSelectors();
 }
+function renderOperatorRun() {
+  const active=['running','queued'].includes(run.status);
+  const exps=run.operator_experiments || [];
+  const reason=run.verdict?.reason_code || run.skip_reason || (active ? '正在测量' : '尚无裁决');
+  $('#diagnostics-panel').classList.add('hidden');
+  $('#experiment-counter').textContent = `${exps.length} 个实验`;
+  $('#run-meta').innerHTML=`<span class="status-dot ${active?'running':run.status==='failed'?'failed':''}"></span><span>${esc(statuses[run.status])}</span><span>·</span><span>算子研究</span><span>·</span><span>任务 ${esc(run.task)}</span><span class="spacer"></span><button id="show-calls">裁决记录</button>`;
+  $('#show-calls').addEventListener('click',()=>showDetail('算子裁决', {verdict:run.verdict, skip_reason:run.skip_reason, events:run.events}));
+  const brief=run.brief?.question?`<div class="hypothesis-source"><strong>这次的问题</strong><br>${esc(run.brief.question)}<br>${esc(run.brief.falsify_if||'')}</div>`:'';
+  $('#hypothesis').innerHTML=`<span class="hypothesis-tag">算子研究</span><div class="hypothesis-text">${esc(run.verdict?.detail || run.skip_reason || run.brief?.question || '研究层正在判断这条结构值不值得做实验。')}</div>${brief}<div class="hypothesis-source">${esc(run.verdict?.next_action || '正确性和同窗计时由门控完成，不调用 Ollama。')}</div>`;
+  if (!exps.length) {
+    $('#chart').innerHTML=`<div class="chart-empty"><span>${esc(reason)}</span></div>`;
+    $('#experiments').innerHTML=empty('没有进入实验', '证据层在实验前判定这条结构赢不了。');
+  } else {
+    $('#chart').innerHTML=`<div class="chart-empty"><span>同窗加速比 ${Number(run.verdict?.best_speedup || 0).toFixed(2)}×</span></div>`;
+    $('#experiments').innerHTML=exps.map(e=>`<div class="experiment-row"><div class="experiment-number">${esc(e.exp_id)}</div><div><div class="experiment-title">${esc((e.rule_chain || []).join(' → ') || e.family || '候选')}</div><div class="experiment-detail"><span>${esc(e.note || e.origin || '')}</span></div></div><div class="experiment-outcome">${e.speedup_same_window==null?'—':`${Number(e.speedup_same_window).toFixed(2)}×`}<small>${e.target_met?'达到 1.10×':'未达 1.10×'}</small></div></div>`).join('');
+  }
+  $('#evidence-experiment').innerHTML='';
+  $('#evidence-claim').innerHTML='';
+  $('#evidence').innerHTML=`<div class="hypothesis-source"><strong>${esc(reason)}</strong><br>${esc(run.verdict?.detail || run.skip_reason || '等待这一轮测量结束。')} 云端调用 0 次。</div>`;
+}
 function renderChart(experiments) {
   experiments=experiments.filter(e=>e.result_scope!=='screen');
   if(!experiments.length){$('#chart').innerHTML='<div class="chart-empty"><span>等待第一次测量</span></div>';return;}
@@ -157,6 +190,7 @@ function renderChart(experiments) {
 }
 function renderBudget() {
   if(!run?.budget){$('#budget').innerHTML='<div class="budget-item"><div class="budget-label">模型 token <strong>0 / —</strong></div><div class="progress-track"></div></div><div class="budget-item"><div class="budget-label">墙钟时间 <strong>尚未开始</strong></div><div class="progress-track"></div></div><div class="budget-footer"><span class="small-dot"></span>云端调用 0 次 · 无隐式升级</div>';return;}
+  if(run.domain==='operator'){const elapsed=run.budget.elapsed||0;$('#budget').innerHTML=`<div class="budget-item"><div class="budget-label">模型 token <strong>0 / 0</strong></div><div class="progress-track"></div></div><div class="budget-item"><div class="budget-label">墙钟时间 <strong>${time(elapsed)} / ${time(run.budget.seconds_limit)}</strong></div><div class="progress-track"><div class="progress-fill purple" style="width:${Math.min(100,elapsed/(run.budget.seconds_limit||1)*100)}%"></div></div></div><div class="budget-footer"><span class="small-dot"></span>0 次模型调用 · 云端 0 次</div>`;return;}
   const b=run.budget;
   const elapsed=b.elapsed_seconds+(['running','queued'].includes(run.status)?Math.max(0,(Date.now()-Date.parse(run.updated_at))/1000):0);
   $('#budget').innerHTML=`<div class="budget-item"><div class="budget-label">模型 token <strong>${number(b.total_tokens)} / ${number(b.token_limit)}</strong></div><div class="progress-track"><div class="progress-fill" style="width:${Math.min(100,b.total_tokens/b.token_limit*100)}%"></div></div></div><div class="budget-item"><div class="budget-label">墙钟时间 <strong>${time(elapsed)} / ${time(b.seconds_limit)}</strong></div><div class="progress-track"><div class="progress-fill purple" style="width:${Math.min(100,elapsed/b.seconds_limit*100)}%"></div></div></div><div class="budget-footer"><span class="small-dot"></span>${b.model_calls} 次模型调用 · 云端 ${b.cloud_calls} 次${b.unknown_reserved?' · 含未知用量预留':''}</div>`;
@@ -194,7 +228,7 @@ async function renderEvidence() {
 }
 function renderRecords() {
   if(!state.runs.length){$('#records').innerHTML=empty('实验档案还是空的','每次真实运行都会自动保存，不会生成示意性能数字。');return;}
-  $('#records').innerHTML=`<div class="table-wrap"><table><thead><tr><th>运行 / 任务</th><th>执行方式</th><th>状态</th><th>验收命中@5</th><th>模型 token</th><th>耗时 / 实验</th><th>预算 / 种子</th><th></th></tr></thead><tbody>${state.runs.map(r=>`<tr><td class="mono">${esc(r.id.slice(0,15))}<small>任务 ${esc(r.task)}</small></td><td>${esc(modeLabel(r))}<small>${esc(r.model||'代码执行，无模型')}</small></td><td><span class="status-badge ${esc(r.status)}">${esc(statuses[r.status])}</span></td><td>${r.guard?percent(r.guard.metrics.complete_at_5):'—'}<small>${r.guard?(r.guard.accepted?'候选通过':'已回退到基线'):'尚未独立验收'}</small></td><td class="mono">${r.budget?number(r.budget.total_tokens):'—'}<small>${r.budget?.unknown_reserved?'含未知 usage 的预留量':''}</small></td><td>${time(r.budget?.elapsed_seconds)} / ${r.experiment_count} 次</td><td class="mono">${number(r.budget?.token_limit)} / ${r.budget?.seconds_limit||'—'}s<small>seed ${r.seed}</small></td><td><button class="small-link" data-open-run="${esc(r.id)}">查看 ↗</button></td></tr>`).join('')}</tbody></table></div><p class="comparison-note">请仅比较同任务、同模型、同预算和同种子的冷 / 热启动运行。零 token 的随机搜索是工具对照，不代表 Agent 已完成自主研究。</p>`;
+  $('#records').innerHTML=`<div class="table-wrap"><table><thead><tr><th>运行 / 任务</th><th>执行方式</th><th>状态</th><th>验收命中@5</th><th>模型 token</th><th>耗时 / 实验</th><th>预算 / 种子</th><th></th></tr></thead><tbody>${state.runs.map(r=>`<tr><td class="mono">${esc(r.id.slice(0,15))}<small>任务 ${esc(r.task)}</small></td><td>${esc(modeLabel(r))}<small>${esc(r.model||'代码执行，无模型')}</small></td><td><span class="status-badge ${esc(r.status)}">${esc(statuses[r.status])}</span></td><td>${r.domain==='operator'?(esc(r.operator_reason||'—')):(r.guard?percent(r.guard.metrics.complete_at_5):'—')}<small>${r.domain==='operator'?'算子裁决':r.guard?(r.guard.accepted?'候选通过':'已回退到基线'):'尚未独立验收'}</small></td><td class="mono">${r.domain==='operator'?'0':r.budget?number(r.budget.total_tokens):'—'}<small>${r.domain==='operator'?'不调用模型':r.budget?.unknown_reserved?'含未知 usage 的预留量':''}</small></td><td>${time(r.domain==='operator'?r.budget?.elapsed:r.budget?.elapsed_seconds)} / ${r.experiment_count} 次</td><td class="mono">${number(r.budget?.token_limit)} / ${r.budget?.seconds_limit||'—'}s<small>seed ${r.seed}</small></td><td><button class="small-link" data-open-run="${esc(r.id)}">查看 ↗</button></td></tr>`).join('')}</tbody></table></div><p class="comparison-note">请仅比较同任务、同模型、同预算和同种子的冷 / 热启动运行。零 token 的随机搜索是工具对照，不代表 Agent 已完成自主研究。</p>`;
   $$('[data-open-run]').forEach(el=>el.addEventListener('click',()=>selectRun(el.dataset.openRun)));
 }
 function renderMemoryLegacy() {
@@ -239,13 +273,16 @@ function renderData(){
 }
 async function selectRun(id){selectedId=id;localStorage.setItem('rl-selected-run',id);evidenceKey='';evidenceClaim='';evidenceExperiment='';goto('workspace');await refresh(true);}
 $('#run-select').addEventListener('change',e=>selectRun(e.target.value));
-$$('.new-run').forEach(el=>el.addEventListener('click',()=>{
+$$('.new-run').forEach(el=>el.addEventListener('click',()=>{document.getElementById('composer').scrollIntoView({block:'center'});$('#brief-input').focus();}));
+function openRetrievalDialog(){
   $('#memory-form-hint').textContent=state.memory.active?`当前 v${state.memory.active}，只作为可被否决的研究先验`:'当前 v0，尚无已发布经验';
   const currentMemory=state.memory.versions.find(v=>v.version===state.memory.active);
-  $('#memory-input').checked=false;$('#run-form [name=task]').value=currentMemory?.schema_version>=3?'D':'C';updateMode();$('#run-dialog').showModal();
-}));
-function updateMode(){const mode=$('#mode-input').value;$('#memory-input').disabled=mode!=='agent'||!state?.memory.active;if(mode==='search')$('#memory-input').checked=false;if(mode==='carry')$('#memory-input').checked=true;$('#mode-description').textContent={agent:'模型负责假设与实验决策；数值计算和验收由代码完成。失败调用与重试也计入预算。',search:'随机选择合法单因素候选，全部测量来自真实检索。此模式不调用模型，也不能发布 Agent 经验。',carry:'仅验证来源任务的最佳配置，用于区分「复用方案」与「研究能力提升」。不调用模型。'}[mode];}
+  $('#memory-input').checked=false;$('#run-form [name=task]').value=state.dataset?(currentMemory?.schema_version>=3?'D':'C'):'win_bias_mean';updateMode();$('#run-dialog').showModal();
+}
+$('#open-retrieval').addEventListener('click',openRetrievalDialog);
+function updateMode(){const task=$('#run-form [name=task]').value;if(operatorTask(task)){$('#mode-input').disabled=true;$('#memory-input').disabled=true;$('#memory-input').checked=false;$('#mode-description').textContent='算子任务由研究层决定：先做微基准，能改写才做实验。正确性和同窗计时由门控完成，不调用 Ollama。';return;}$('#mode-input').disabled=false;const mode=$('#mode-input').value;$('#memory-input').disabled=mode!=='agent'||!state?.memory.active;if(mode==='search')$('#memory-input').checked=false;if(mode==='carry')$('#memory-input').checked=true;$('#mode-description').textContent={agent:'模型负责假设与实验决策；数值计算和验收由代码完成。失败调用与重试也计入预算。',search:'随机选择合法单因素候选，全部测量来自真实检索。此模式不调用模型，也不能发布 Agent 经验。',carry:'仅验证来源任务的最佳配置，用于区分「复用方案」与「研究能力提升」。不调用模型。'}[mode];}
 $('#mode-input').addEventListener('change',updateMode);
+$('#run-form [name=task]').addEventListener('change',updateMode);
 $('#run-form').addEventListener('submit',async e=>{e.preventDefault();const form=new FormData(e.target);const body=Object.fromEntries(form);body.use_memory=$('#memory-input').checked;for(const k of ['max_experiments','token_limit','seconds_limit','seed'])body[k]=Number(body[k]);body.memory_version=state.memory.active;const button=$('#run-form [type=submit]');button.disabled=true;try{const created=await api('/api/runs',body);$('#run-dialog').close();await selectRun(created.id);toast('研究已启动，结果和全部调用消耗将自动保存。');}catch(error){toast(error.message);}finally{button.disabled=false;}});
 async function checkModels(){const badge=$('#ollama-status');badge.innerHTML='<span class="loader"></span>检查 Ollama…';try{modelStatus=await api('/api/ollama');badge.classList.toggle('offline',!modelStatus.available);badge.innerHTML=`<span class="small-dot"></span>${modelStatus.available?'Ollama 已连接':'Ollama 未连接'}`;$('#model-options').innerHTML=modelStatus.models.filter(m=>!m.name.toLowerCase().includes('cloud')).map(m=>`<option value="${esc(m.name)}">${esc(m.details?.parameter_size||'')}</option>`).join('');$('#model-details').textContent=modelStatus.available?`检测到 ${modelStatus.models.length} 个模型。当前默认 ${state?.settings.model||'未设置'}。所有推理保持本地，云端接口关闭。`:`本地服务未连接：${modelStatus.error}。请运行 ollama serve，再检测服务。`;}catch(e){badge.textContent='连接检测失败';toast(e.message);}}
 function openSettings(){if(state){$('#settings-form [name=ollama_url]').value=state.settings.ollama_url;$('#model-name').value=state.settings.model;}$('#settings-dialog').showModal();checkModels();}
@@ -254,6 +291,75 @@ $('#settings-form').addEventListener('submit',async e=>{e.preventDefault();try{a
 $('#prepare-button').addEventListener('click',async()=>{try{await api('/api/prepare',{});toast('开始准备数据，所有文件写入当前项目的 data 目录。');await refresh(true);}catch(e){toast(e.message);}});
 $('#finalize-button').addEventListener('click',()=>$('#confirm-dialog').showModal());
 $('#confirm-finalize').addEventListener('click',async()=>{const button=$('#confirm-finalize');button.disabled=true;button.textContent='正在统一验收…';try{await api('/api/finalize',{});$('#confirm-dialog').close();toast('方案已冻结，最终测试结果已保存。');await refresh(true);await renderFinal();}catch(e){toast(e.message);}finally{button.disabled=false;button.textContent='确认冻结并验收';}});
+let briefThread=[], currentPlan=null, attachedTask=null;
+function renderBrief(){
+  $('#brief-thread').innerHTML=briefThread.map(item=>`<p class="brief-line ${item.role==='user'?'user':'assistant'}">${esc(item.content)}</p>`).join('');
+  const card=$('#plan-card');
+  if(!currentPlan){card.classList.add('hidden');return;}
+  card.classList.remove('hidden');
+  const steps=(currentPlan.steps||[]).map(step=>`<li>${esc(step)}</li>`).join('');
+  const label=currentPlan.source==='ollama'?'本地模型拟定':`规则草拟${currentPlan.log?.reason_label?` · ${currentPlan.log.reason_label}`:''}`;
+  card.innerHTML=`<h3>${esc(currentPlan.title)}</h3><p class="body-muted">${esc(currentPlan.reply)}</p><p><strong>成功标准</strong> ${esc(currentPlan.success)}</p><p><strong>如何否证</strong> ${esc(currentPlan.falsify_if)}</p><ol>${steps}</ol><div class="composer-actions"><button type="button" class="primary-button" id="start-plan">按这个计划开始</button><button type="button" class="pill subtle" id="open-plan-log">${esc(label)}</button></div>`;
+  $('#start-plan').addEventListener('click',startPlan);
+  $('#open-plan-log').addEventListener('click',openPlanLog);
+}
+async function renderLogs(){
+  try{
+    const data = await api('/api/logs');
+    const entries = data.entries || [];
+    $('#log-count').textContent = String(entries.length);
+    if (!entries.length){$('#log-view').innerHTML=empty('还没有任务日志','拟定计划或开始研究之后，过程会显示在这里。');return;}
+    $('#log-view').innerHTML=entries.map(entry=>`<div class="log-line"><time>${esc((entry.at||'').replace('T',' ').slice(0,19))}</time><span class="log-kind">${esc(entry.kind)}</span><span>${esc(entry.text)}${entry.task?` · ${esc(entry.task)}`:''}${entry.elapsed_ms?` · ${esc(entry.elapsed_ms)}ms`:''}</span></div>`).join('');
+  }catch(error){if($('#log-view'))$('#log-view').innerHTML=empty('日志暂时读不到',error.message);}
+}
+async function openPlanLog(){
+  try{
+    const data=await api('/api/logs');
+    showDetail('拟定日志', {latest: currentPlan?.log || null, entries: data.entries || []});
+  }catch(error){toast(error.message);}
+}
+async function draftBrief(){
+  const text=$('#brief-input').value.trim();
+  if(!text){toast('先写一句研究方向。');return;}
+  briefThread.push({role:'user',content:text});
+  $('#brief-input').value='';
+  renderBrief();
+  const button=$('#draft-brief');
+  button.disabled=true;
+  try{
+    currentPlan=await api('/api/brief',{messages:briefThread,task:attachedTask});
+    briefThread.push({role:'assistant',content:currentPlan.reply});
+    renderBrief();
+  }catch(error){toast(error.message);}
+  finally{button.disabled=false;}
+}
+async function startPlan(){
+  if(!currentPlan)return;
+  if(currentPlan.domain==='unscoped'){toast('这个方向还不能直接开跑。把它改成算子参考实现，或明确说要做证据检索。');return;}
+  if(currentPlan.domain==='retrieval'){
+    if(!state.dataset){toast('检索方向需要先准备 SciFact。');return;}
+    try{const created=await api('/api/runs',{task:currentPlan.task_name||'C',mode:'agent',use_memory:false,max_experiments:4,token_limit:16000,seconds_limit:900,seed:42,memory_version:state.memory.active});await selectRun(created.id);toast('检索研究已按计划启动。');}catch(error){toast(error.message);}
+    return;
+  }
+  const task=attachedTask?.name||currentPlan.task_name;
+  if(!task){toast('这个方向还没有可运行的算子。先加入 reference，或在例子上拟定计划。');return;}
+  try{const created=await api('/api/runs',{task,seconds_limit:180,max_experiments:4,brief:currentPlan});await selectRun(created.id);toast('算子研究已按计划启动。');}catch(error){toast(error.message);}
+}
+async function addTask(){
+  const button=$('#add-task');
+  button.disabled=true;
+  try{
+    attachedTask=await api('/api/tasks',{name:$('#task-name').value.trim(),reference:$('#task-source').value,shapes:$('#task-shapes').value});
+    briefThread.push({role:'assistant',content:`已加入 ${attachedTask.name}。结构是 ${attachedTask.ir}。${attachedTask.note}`});
+    renderBrief();
+    toast(`已加入 ${attachedTask.name}`);
+  }catch(error){toast(error.message);}
+  finally{button.disabled=false;}
+}
+$('#draft-brief').addEventListener('click',draftBrief);
+$('#add-task').addEventListener('click',addTask);
+$$('[data-prompt]').forEach(el=>el.addEventListener('click',()=>{$('#brief-input').value=el.dataset.prompt;$('#brief-input').focus();}));
+$('#brief-input').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))draftBrief();});
 goto(location.hash.slice(1)||'workspace');
 refresh(true).then(checkModels);
 setInterval(()=>refresh(),2200);
