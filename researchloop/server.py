@@ -10,7 +10,11 @@ from pathlib import Path
 from .dataset import prepare
 from . import __version__
 from .ollama import probe
+from . import activity
+from .brief import draft
 from .runner import ResearchService
+from .scenarios.operator import service as operator_service
+from .scenarios.operator.custom import save_task
 from .storage import DATA, LOCK, ROOT, RUNS, get_memory, list_runs, memory_state, now, promote, read_json, rollback, run_path, settings, write_json
 
 SERVICE = ResearchService()
@@ -20,6 +24,14 @@ WEB = ROOT / "web"
 def summary(run):
     keys = ("id", "version", "created_at", "finished_at", "status", "task", "mode", "model", "memory_version", "requested_memory_version", "memory_selection", "seed", "best_config", "budget", "stop_reason", "error", "selected_experiment_id", "evaluation_counts", "source_hash")
     result = {k: run.get(k) for k in keys}
+    result["domain"] = run.get("domain", "retrieval")
+    if run.get("domain") == "operator":
+        result["experiment_count"] = len(run.get("operator_experiments") or [])
+        result["baseline_metrics"] = None
+        result["guard"] = None
+        result["has_memory_candidate"] = bool(run.get("memory_candidate"))
+        result["operator_reason"] = (run.get("verdict") or {}).get("reason_code")
+        return result
     result["experiment_count"] = max(0, len(run["experiments"]) - 1)
     result["baseline_metrics"] = run["experiments"][0]["result"]["metrics"] if run["experiments"] else None
     guard = run.get("guard")
@@ -69,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
                     "final_test_revealed": bool(final), "version": __version__})
             if path == "/api/ollama":
                 return self.send(200, probe(settings()["ollama_url"]))
+            if path == "/api/logs":
+                return self.send(200, {"entries": activity.recent()})
             if path == "/api/final":
                 report = read_json(ROOT / "data" / "final_evaluation.json")
                 if not report:
@@ -131,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             if "application/json" not in self.headers.get("Content-Type", ""):
                 return self.send(415, {"error": "Content-Type must be application/json"})
             length = int(self.headers.get("Content-Length", 0))
-            if length > 20000:
+            if length > 80000:
                 raise ValueError("请求内容过大")
             body = json.loads(self.rfile.read(length) or b"{}")
             path = urllib.parse.urlparse(self.path).path
@@ -163,7 +177,60 @@ class Handler(BaseHTTPRequestHandler):
                 value = {"ollama_url": url, "model": model, "cloud_enabled": False}
                 write_json(ROOT / "config.json", value)
                 return self.send(200, value)
+            if path == "/api/brief":
+                messages = body.get("messages")
+                if not isinstance(messages, list) or len(messages) > 12:
+                    raise ValueError("对话需要 1 到 12 条")
+                model = None
+                skip = "未调用模型"
+                if body.get("use_model", True):
+                    cfg = settings()
+                    status = probe(cfg["ollama_url"])
+                    if status["available"] and cfg.get("model"):
+                        model = cfg
+                        skip = None
+                    elif not status["available"]:
+                        skip = "Ollama 未连接"
+                    else:
+                        skip = "未选择模型"
+                plan = draft(messages, task=body.get("task") if isinstance(body.get("task"), dict) else None,
+                             model=model, skip_reason=skip)
+                log = plan.get("log") or {}
+                activity.record("brief",
+                                f"拟定计划 · {log.get('reason_label') or plan.get('source')} · {log.get('detail') or plan.get('title') or ''}",
+                                model=log.get("model") or "", elapsed_ms=log.get("elapsed_ms") or 0,
+                                reason=log.get("reason_code") or "")
+                return self.send(200, plan)
+            if path == "/api/tasks":
+                try:
+                    saved = save_task(body.get("name"), body.get("reference"), body.get("shapes"))
+                except ValueError as exc:
+                    activity.record("task", f"加入算子失败：{exc}")
+                    raise
+                activity.record("task", f"加入算子 {saved['name']}：{saved['ir']}")
+                return self.send(200, saved)
             if path == "/api/runs":
+                if operator_service.is_operator_task(str(body.get("task"))):
+                    with LOCK:
+                        if SERVICE.active or (SERVICE.preparing and SERVICE.preparing.get("status") == "running"):
+                            raise ValueError("已有任务正在运行")
+                        run, run_dir = operator_service.begin(
+                            str(body.get("task")),
+                            seconds_limit=int(body.get("seconds_limit", 180)),
+                            max_experiments=int(body.get("max_experiments", 4)),
+                            brief=body.get("brief") if isinstance(body.get("brief"), dict) else None)
+                        SERVICE.active = run["id"]
+
+                        def work(current=run, folder=run_dir):
+                            try:
+                                operator_service.complete(current, folder)
+                            finally:
+                                with LOCK:
+                                    if SERVICE.active == current["id"]:
+                                        SERVICE.active = None
+
+                        threading.Thread(target=work, daemon=True).start()
+                    return self.send(202, summary(run))
                 return self.send(202, summary(SERVICE.start(body)))
             if path.startswith("/api/runs/") and path.endswith("/cancel"):
                 return self.send(200, SERVICE.cancel(path.split("/")[3]))
